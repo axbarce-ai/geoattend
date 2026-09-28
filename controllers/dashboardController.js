@@ -47,6 +47,46 @@ async function getStats(req, res, next) {
     const classificationMap = { Permanent: 0, COS: 0, 'Casual/Job Order': 0, Other: 0 };
     for (const row of classificationBreakdown) classificationMap[row.classification] = row.count;
 
+    // "Needs attention" counts: things waiting on an admin.
+    const [[pendingDevices]] = await pool.query(`SELECT COUNT(*) AS count FROM mobile_devices WHERE status = 'pending'`);
+    const [[openAnomalies]] = await pool.query('SELECT COUNT(*) AS count FROM geo_anomalies WHERE resolved = 0');
+    const [[lockedFaces]] = await pool.query(
+      'SELECT COUNT(*) AS count FROM employees WHERE is_approved = 1 AND face_locked_until IS NOT NULL AND face_locked_until > NOW()'
+    );
+
+    // Present / Late per day for the last 7 days (today included), oldest
+    // first. Days with no attendance are filled in with zeros.
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      days.push(localDate(d));
+    }
+    const [trendRows] = await pool.query(
+      `SELECT DATE_FORMAT(attendance_date, '%Y-%m-%d') AS day,
+              SUM(attendance_status = 'Present') AS present,
+              SUM(attendance_status = 'Late') AS late
+       FROM attendance WHERE attendance_date BETWEEN ? AND ?
+       GROUP BY attendance_date`,
+      [days[0], days[6]]
+    );
+    const trendByDay = Object.fromEntries(trendRows.map((r) => [r.day, r]));
+    const trend = days.map((day) => ({
+      date: day,
+      present: Number(trendByDay[day]?.present || 0),
+      late: Number(trendByDay[day]?.late || 0)
+    }));
+
+    // Events running right now, with how many employees have checked in.
+    const [ongoingEvents] = await pool.query(
+      `SELECT ev.id, ev.title, ev.venue, ev.start_datetime, ev.end_datetime,
+              (SELECT COUNT(DISTINCT a.employee_id) FROM attendance a
+                WHERE a.event_id = ev.id AND a.attendance_status IN ('Present','Late')) AS checked_in
+       FROM events ev
+       WHERE NOW() BETWEEN ev.start_datetime AND ev.end_datetime AND ev.is_recurring_parent = 0
+       ORDER BY ev.end_datetime ASC LIMIT 3`
+    );
+
     res.json({
       success: true,
       data: {
@@ -60,7 +100,12 @@ async function getStats(req, res, next) {
         registeredDevices: devices.count,
         todayPresent: todayPresent.count,
         todayLate: todayLate.count,
-        classificationBreakdown: classificationMap
+        classificationBreakdown: classificationMap,
+        pendingDevices: pendingDevices.count,
+        openAnomalies: openAnomalies.count,
+        lockedFaces: lockedFaces.count,
+        trend,
+        ongoingEvents
       }
     });
   } catch (err) {

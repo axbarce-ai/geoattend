@@ -1189,6 +1189,12 @@ async function deleteAttendance(req, res, next) {
 // including time spent outside — as attendance. When present and sane
 // (not in the future, not implausibly old), observed_at is used as the
 // session's time_out instead of the moment this request was processed.
+//
+// `location_off: true` means the employee switched the phone's Location/GPS
+// off while the session was open. The app can no longer prove they're inside
+// the geofence, so the session is closed right away (no outside-streak, no
+// debounce), at observed_at = the moment Location went off. Duration only
+// resumes once Location is back on and a fresh time-in lands.
 const HEARTBEAT_OBSERVED_AT_FUTURE_SKEW_MS = 2 * 60 * 1000; // small clock-skew allowance
 const HEARTBEAT_OBSERVED_AT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // ignore implausibly stale/garbage values
 
@@ -1206,14 +1212,22 @@ function resolveHeartbeatEndTime(observedAtRaw, sessionOpenedAt) {
 async function heartbeat(req, res, next) {
   try {
     const { id } = req.params;
-    const { latitude, longitude, observed_at, accuracy, mocked } = req.body;
-    if (latitude === undefined || longitude === undefined) {
+    const { observed_at, accuracy, mocked } = req.body;
+    let { latitude, longitude } = req.body;
+    const locationOff = req.body.location_off === true || req.body.location_off === 'true';
+    if (!locationOff && (latitude === undefined || longitude === undefined)) {
       return res.status(400).json({ success: false, message: 'latitude and longitude are required.' });
     }
 
     const [rows] = await pool.query('SELECT * FROM attendance WHERE id = ? AND employee_id = ?', [id, req.employee.id]);
     const record = rows[0];
     if (!record) return res.status(404).json({ success: false, message: 'Attendance record not found.' });
+    if (locationOff) {
+      // The phone may never have had a fix to send -- fall back to the last
+      // position the server already has for this session.
+      if (latitude == null) latitude = record.last_lat ?? record.latitude;
+      if (longitude == null) longitude = record.last_lng ?? record.longitude;
+    }
     if (record.time_out) {
       // Nothing currently open — the employee already left. If they walk
       // back into the geofence, submitAttendance() opens a fresh session
@@ -1233,7 +1247,7 @@ async function heartbeat(req, res, next) {
     }
 
     // Debounce: ignore pings that arrive faster than the configured minimum interval.
-    if (record.last_ping_at) {
+    if (record.last_ping_at && !locationOff) {
       const secondsSinceLast = (Date.now() - new Date(record.last_ping_at).getTime()) / 1000;
       if (secondsSinceLast < config.attendance.heartbeatMinIntervalSeconds) {
         return res.json({ success: true, message: 'Ping ignored (too soon).', data: { ended: false } });
@@ -1243,7 +1257,9 @@ async function heartbeat(req, res, next) {
     const [geofenceRows] = await pool.query('SELECT * FROM geofences WHERE id = ?', [record.geofence_id]);
     const geofence = geofenceRows[0];
     let inside = true;
-    if (geofence) {
+    if (locationOff) {
+      inside = false;
+    } else if (geofence) {
       let points = [];
       if (geofence.shape_type !== 'circle') {
         const [pointRows] = await pool.query('SELECT lat, lng FROM geofence_points WHERE geofence_id = ? ORDER BY point_order', [geofence.id]);
@@ -1257,7 +1273,7 @@ async function heartbeat(req, res, next) {
     if (isMockedLocation(mocked)) inside = false;
 
     const newStreak = inside ? 0 : (record.outside_streak || 0) + 1;
-    const shouldAutoEnd = newStreak >= config.attendance.autoEndOutsideStreakThreshold;
+    const shouldAutoEnd = locationOff || newStreak >= config.attendance.autoEndOutsideStreakThreshold;
 
     if (shouldAutoEnd) {
       // Close whichever session is still open for this attendance row, and
@@ -1298,11 +1314,13 @@ async function heartbeat(req, res, next) {
       );
       await pool.query(
         `INSERT INTO attendance_logs (attendance_id, employee_id, action, details) VALUES (?, ?, 'auto_time_out', ?)`,
-        [id, req.employee.id, JSON.stringify({ latitude, longitude, reason: 'left_geofence', sessionDurationSeconds, totalDurationSeconds, observedAt: endTime.toISOString() })]
+        [id, req.employee.id, JSON.stringify({ latitude, longitude, reason: locationOff ? 'location_off' : 'left_geofence', sessionDurationSeconds, totalDurationSeconds, observedAt: endTime.toISOString() })]
       );
       await pool.query(
         `INSERT INTO notifications (employee_id, title, message, type) VALUES (?, 'Time-Out Recorded', ?, 'attendance_auto_end')`,
-        [req.employee.id, `You left the event area, so your session was automatically timed out. Total time so far: ${workHours} hour(s).`]
+        [req.employee.id, locationOff
+          ? `Your Location was turned off, so your session was automatically timed out. Turn Location back on to continue. Total time so far: ${workHours} hour(s).`
+          : `You left the event area, so your session was automatically timed out. Total time so far: ${workHours} hour(s).`]
       );
     } else {
       await pool.query(

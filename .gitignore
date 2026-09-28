@@ -69,3 +69,6 @@ etc/
 # --- JMeter load-test output ---
 loadtest/results/
 loadtest/cases/data/
+
+# Local-only APK builds served for phone download
+public/downloads/

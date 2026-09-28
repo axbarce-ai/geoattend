@@ -79,11 +79,50 @@ async function addAdminNotifications() {
   );
 }
 
+async function indexExists(table, index) {
+  const [rows] = await pool.query(
+    `SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?`,
+    [table, index]
+  );
+  return rows.length > 0;
+}
+
+// Removes schema the app never reads or writes: the old monthly `ratings`
+// table (replaced by employee_ratings), columns nothing fills in, and two
+// single-column indexes already covered by a composite index on the same
+// leading column. Every one of these was empty when this was written.
+async function dropUnusedSchema() {
+  await pool.query('DROP TABLE IF EXISTS ratings');
+  const columns = [
+    ['ocr_records', 'extracted_name'],
+    ['ocr_records', 'extracted_position'],
+    ['ocr_records', 'confidence'],
+    ['attendance', 'rejection_reason'],
+    ['certificates', 'qr_code_path'],
+    ['mobile_devices', 'mac_address']
+  ];
+  for (const [table, column] of columns) {
+    if (!(await columnExists(table, column))) continue;
+    await pool.query(`ALTER TABLE \`${table}\` DROP COLUMN \`${column}\``);
+    console.log(`[schema] Dropped unused column ${table}.${column}.`);
+  }
+  const indexes = [
+    ['attendance', 'idx_attendance_emp'], // covered by uniq_emp_date_event
+    ['attendance_sessions', 'idx_attendance_sessions_attendance'] // covered by idx_attendance_sessions_open
+  ];
+  for (const [table, index] of indexes) {
+    if (!(await indexExists(table, index))) continue;
+    await pool.query(`ALTER TABLE \`${table}\` DROP INDEX \`${index}\``);
+    console.log(`[schema] Dropped redundant index ${table}.${index}.`);
+  }
+}
+
 async function run() {
   await addEmployeeApproval();
   await addFaceRecordSource();
   await addAdminEmailOtps();
   await addAdminNotifications();
+  await dropUnusedSchema();
 }
 
 module.exports = { run };

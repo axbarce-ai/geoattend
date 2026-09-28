@@ -67,7 +67,7 @@ services:
       - key: MAIL_FROM_EMAIL
         sync: false
       - key: MAIL_FROM_NAME
-        value: GeoAttend CSPC
+        value: GeoAttend
       # Google Apps Script email relay (scripts/mail-relay.gs) -- fallback sender
       - key: MAIL_RELAY_URL
         sync: false

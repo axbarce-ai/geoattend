@@ -13,5 +13,6 @@ router.post('/mobile/verify', requireEmployeeAuth, uploadOcr.single('image'), oc
 
 router.post('/verify', uploadOcr.single('image'), ocrController.verifyId);
 router.get('/records', ocrController.getOcrRecords);
+router.delete('/records/:id', ocrController.deleteOcrRecord);
 
 module.exports = router;

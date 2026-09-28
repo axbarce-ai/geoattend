@@ -7,6 +7,7 @@ router.get('/mobile/active', requireEmployeeAuth, geofenceController.getActiveFo
 
 router.use(requireAuth, requireRole('super_admin'));
 router.get('/default-location', geofenceController.getDefaultLocation);
+router.put('/default-location', geofenceController.saveDefaultLocation);
 router.get('/', geofenceController.getGeofences);
 router.post('/', geofenceController.createGeofence);
 router.put('/:id', geofenceController.updateGeofence);

@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const faceService = require('../services/faceService');
 const { logAction } = require('../services/auditService');
+const { removeUpload } = require('../services/uploadStore');
 const { recordVerificationAttendance } = require('./attendanceController');
 
 // POST /api/face/verify  (multipart: image)
@@ -154,4 +155,35 @@ async function getFaceRecords(req, res, next) {
   }
 }
 
-module.exports = { verifyFace, getFaceRecords };
+// DELETE /api/face/records/:id
+// Removes one check from the Recent Face Checks log. The photo of an admin
+// kiosk check goes with it; a mobile anomaly check's selfie is kept, since
+// it is also the attendance record's evidence photo. An attendance row
+// recorded from this check keeps its attendance; only its face_record_id
+// link is cleared (ON DELETE SET NULL).
+async function deleteFaceRecord(req, res, next) {
+  try {
+    const [rows] = await pool.query('SELECT id, image_path, result, source FROM face_records WHERE id = ?', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ success: false, message: 'Face check not found.' });
+    const record = rows[0];
+
+    await pool.query('DELETE FROM face_records WHERE id = ?', [record.id]);
+    if (record.source !== 'mobile_anomaly' && String(record.image_path || '').startsWith('/uploads/faces/')) {
+      await removeUpload(record.image_path).catch((err) =>
+        console.error(`[Face] Could not delete photo ${record.image_path}:`, err.message));
+    }
+
+    await logAction({
+      adminId: req.admin ? req.admin.id : null,
+      action: 'delete',
+      module: 'face',
+      details: { face_record_id: record.id, result: record.result, source: record.source },
+      ip: req.ip
+    });
+    res.json({ success: true, message: 'Face check deleted.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { verifyFace, getFaceRecords, deleteFaceRecord };

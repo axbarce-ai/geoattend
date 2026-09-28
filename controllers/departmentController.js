@@ -30,6 +30,34 @@ async function createDepartment(req, res, next) {
   }
 }
 
+// PUT /api/departments/:id  body: { name, office, description }
+// Employees point at the department by id, so a rename carries over to all
+// of them. Employees whose office was just the old office name (the default
+// when an admin registers someone) get the new office name too.
+async function updateDepartment(req, res, next) {
+  try {
+    const name = String(req.body.name || '').trim();
+    if (!name) return res.status(400).json({ success: false, message: 'Department name is required.' });
+    const office = String(req.body.office || '').trim() || name;
+    const description = String(req.body.description || '').trim() || null;
+
+    const [rows] = await pool.query('SELECT * FROM departments WHERE id = ?', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ success: false, message: 'Department not found.' });
+    const [dup] = await pool.query('SELECT id FROM departments WHERE name = ? AND id != ?', [name, req.params.id]);
+    if (dup[0]) return res.status(409).json({ success: false, message: `A department named "${name}" already exists.` });
+
+    await pool.query('UPDATE departments SET name = ?, office = ?, description = ? WHERE id = ?', [name, office, description, req.params.id]);
+    const oldOffice = rows[0].office || rows[0].name;
+    if (oldOffice !== office) {
+      await pool.query('UPDATE employees SET office = ? WHERE department_id = ? AND office = ?', [office, req.params.id, oldOffice]);
+    }
+    await logAction({ adminId: req.admin.id, action: 'update', module: 'departments', details: { id: Number(req.params.id), from: rows[0].name, name, office }, ip: req.ip });
+    res.json({ success: true, message: 'Department updated.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function deleteDepartment(req, res, next) {
   try {
     const [result] = await pool.query('DELETE FROM departments WHERE id = ?', [req.params.id]);
@@ -40,4 +68,4 @@ async function deleteDepartment(req, res, next) {
   }
 }
 
-module.exports = { getDepartments, createDepartment, deleteDepartment };
+module.exports = { getDepartments, createDepartment, updateDepartment, deleteDepartment };

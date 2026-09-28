@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const ocrService = require('../services/ocrService');
 const { logAction } = require('../services/auditService');
+const { removeUpload } = require('../services/uploadStore');
 const { recordVerificationAttendance } = require('./attendanceController');
 
 // POST /api/ocr/verify  (multipart: image)
@@ -119,4 +120,30 @@ async function getOcrRecords(req, res, next) {
   }
 }
 
-module.exports = { verifyId, getOcrRecords };
+// DELETE /api/ocr/records/:id
+// Removes one scan from the Recent ID Scans log together with its photo.
+// An attendance row recorded from this scan keeps its attendance; only its
+// ocr_record_id link is cleared (ON DELETE SET NULL).
+async function deleteOcrRecord(req, res, next) {
+  try {
+    const [rows] = await pool.query('SELECT id, image_path, result FROM ocr_records WHERE id = ?', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ success: false, message: 'ID scan not found.' });
+
+    await pool.query('DELETE FROM ocr_records WHERE id = ?', [rows[0].id]);
+    await removeUpload(rows[0].image_path).catch((err) =>
+      console.error(`[OCR] Could not delete photo ${rows[0].image_path}:`, err.message));
+
+    await logAction({
+      adminId: req.admin ? req.admin.id : null,
+      action: 'delete',
+      module: 'ocr',
+      details: { ocr_record_id: rows[0].id, result: rows[0].result },
+      ip: req.ip
+    });
+    res.json({ success: true, message: 'ID scan deleted.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { verifyId, getOcrRecords, deleteOcrRecord };

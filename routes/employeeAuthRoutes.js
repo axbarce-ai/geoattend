@@ -3,6 +3,7 @@ const router = express.Router();
 const rateLimit = require('express-rate-limit');
 const { clientRateLimitOptions } = require('../middleware/rateLimitKey');
 const employeeAuthController = require('../controllers/employeeAuthController');
+const employeeOptionController = require('../controllers/employeeOptionController');
 const { requireEmployeeAuth } = require('../middleware/authMiddleware');
 const { uploadRegistration } = require('../middleware/uploadMiddleware');
 
@@ -21,6 +22,9 @@ const loginLimiter = rateLimit({
 router.post('/login', loginLimiter, employeeAuthController.login);
 router.post('/google', loginLimiter, employeeAuthController.googleLogin);
 router.get('/departments', employeeAuthController.listDepartments);
+// Position / Classification lists the admin manages from the dashboard's
+// employee form, for the registration form's dropdowns (public, like /departments).
+router.get('/employee-options', employeeOptionController.getOptions);
 // Registration sequence: Continue with Google -> employee details -> face
 // registration, all submitted together here (multipart: employee details +
 // a still frame under "image"; "video" is accepted for backward

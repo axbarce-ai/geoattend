@@ -95,7 +95,7 @@ async function findScheduleConflict(conn, { title, venue, occurrences, excludeEv
 async function getDefaultLocation(req, res, next) {
   try {
     const [rows] = await pool.query(
-      `SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('cspc_latitude','cspc_longitude','cspc_label')`
+      `SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('cspc_latitude','cspc_longitude','cspc_label','cspc_zoom')`
     );
     const byKey = Object.fromEntries(rows.map((r) => [r.setting_key, r.setting_value]));
     res.json({
@@ -103,9 +103,41 @@ async function getDefaultLocation(req, res, next) {
       data: {
         lat: byKey.cspc_latitude ? Number(byKey.cspc_latitude) : config.defaultGeofence.lat,
         lng: byKey.cspc_longitude ? Number(byKey.cspc_longitude) : config.defaultGeofence.lng,
-        label: byKey.cspc_label || config.defaultGeofence.label
+        label: byKey.cspc_label || config.defaultGeofence.label,
+        // Map zoom the Geo-Fences page opens at (18 = individual campus buildings).
+        zoom: byKey.cspc_zoom ? Number(byKey.cspc_zoom) : 18
       }
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/geofences/default-location  body: { lat, lng, zoom }
+// "Save this map view as CSPC default" on the Geo-Fences page: the map's
+// current center and zoom become what the page opens at and what "Use CSPC
+// Default Location" jumps to.
+async function saveDefaultLocation(req, res, next) {
+  try {
+    const lat = Number(req.body.lat);
+    const lng = Number(req.body.lng);
+    const zoom = Math.round(Number(req.body.zoom));
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+      return res.status(400).json({ success: false, message: 'Invalid map position.' });
+    }
+    if (!Number.isFinite(zoom) || zoom < 3 || zoom > 21) {
+      return res.status(400).json({ success: false, message: 'Invalid map zoom.' });
+    }
+    const values = [['cspc_latitude', lat.toFixed(7)], ['cspc_longitude', lng.toFixed(7)], ['cspc_zoom', String(zoom)]];
+    for (const [key, value] of values) {
+      await pool.query(
+        `INSERT INTO settings (setting_key, setting_value) VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+        [key, value]
+      );
+    }
+    await logAction({ adminId: req.admin.id, action: 'update', module: 'geofence_default_location', details: { lat, lng, zoom }, ip: req.ip });
+    res.json({ success: true, message: 'CSPC default map view saved.', data: { lat: Number(lat.toFixed(7)), lng: Number(lng.toFixed(7)), zoom } });
   } catch (err) {
     next(err);
   }
@@ -390,4 +422,4 @@ async function getActiveForMobile(req, res, next) {
   }
 }
 
-module.exports = { getGeofences, createGeofence, updateGeofence, deleteGeofence, toggleGeofence, getActiveForMobile, getDefaultLocation };
+module.exports = { getGeofences, createGeofence, updateGeofence, deleteGeofence, toggleGeofence, getActiveForMobile, getDefaultLocation, saveDefaultLocation };

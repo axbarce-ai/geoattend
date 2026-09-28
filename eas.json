@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": ">= 21.5.0",
+    "version": ">= 21.8.0",
     "appVersionSource": "remote"
   },
   "build": {
@@ -10,11 +10,6 @@
     },
     "preview": {
       "distribution": "internal"
-    },
-    "local": {
-      "distribution": "internal",
-      "android": { "buildType": "apk" },
-      "env": { "API_BASE_URL": "http://192.168.254.107:3000/api" }
     },
     "production": {
       "autoIncrement": true

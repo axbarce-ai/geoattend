@@ -79,6 +79,14 @@ export async function getDepartments() {
   return data;
 }
 
+// GET /api/employee-auth/employee-options — public. The Position and
+// Classification lists the admin manages from the dashboard, as
+// { positions: [...], classifications: [...] }.
+export async function getEmployeeOptions() {
+  const { data } = await api.get('/employee-auth/employee-options');
+  return data;
+}
+
 // POST /api/employee-auth/link-device (multipart) — confirms the pending Google
 // sign-in against an admin-provisioned (or newly self-provisioned) employee
 // record, registers this device, AND enrolls the captured face — all in one
@@ -115,12 +123,16 @@ export async function submitAttendance(payload) {
 // reading captured while offline, so the server closes the session at the
 // moment the employee actually left rather than whenever the retry lands.
 // `accuracy` (meters) and `mocked` (Android's mock-location flag) belong to
-// that same reading.
-export async function sendHeartbeat(attendanceId, latitude, longitude, observedAt, { accuracy, mocked } = {}) {
-  const body = { latitude, longitude };
+// that same reading. `locationOff` tells the server the phone's Location was
+// switched off, so it closes the session immediately at `observedAt`.
+export async function sendHeartbeat(attendanceId, latitude, longitude, observedAt, { accuracy, mocked, locationOff } = {}) {
+  const body = {};
+  if (latitude != null) body.latitude = latitude;
+  if (longitude != null) body.longitude = longitude;
   if (observedAt) body.observed_at = observedAt;
   if (accuracy != null) body.accuracy = accuracy;
   if (mocked) body.mocked = true;
+  if (locationOff) body.location_off = true;
   const { data } = await api.post(`/attendance/${attendanceId}/heartbeat`, body);
   return data;
 }

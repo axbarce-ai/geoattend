@@ -159,6 +159,14 @@ real deployment**).
 
 ---
 
+## Building the local (LAN) Android app
+
+To build **GeoAttend (Local)**, an APK that connects to the server on this
+PC over Wi-Fi instead of Render (and what to do when the PC's IP changes),
+see [`mobile/BUILD-LOCAL.md`](mobile/BUILD-LOCAL.md).
+
+---
+
 ## Project structure
 
 ```

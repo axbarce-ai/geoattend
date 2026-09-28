@@ -44,7 +44,7 @@ async function getDevices(req, res, next) {
 // POST /api/devices/register  (called by the mobile app on first login)
 async function registerDevice(req, res, next) {
   try {
-    const { employee_id, device_uid, model, brand, os, mac_address } = req.body;
+    const { employee_id, device_uid, model, brand, os } = req.body;
     if (!employee_id || !device_uid) {
       return res.status(400).json({ success: false, message: 'employee_id and device_uid are required.' });
     }
@@ -84,9 +84,9 @@ async function registerDevice(req, res, next) {
     // the employee already having an approved device here.
 
     const [result] = await pool.query(
-      `INSERT INTO mobile_devices (employee_id, device_uid, model, brand, os, mac_address, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
-      [employee_id, device_uid, model || null, brand || null, os || null, mac_address || null]
+      `INSERT INTO mobile_devices (employee_id, device_uid, model, brand, os, status)
+       VALUES (?, ?, ?, ?, ?, 'pending')`,
+      [employee_id, device_uid, model || null, brand || null, os || null]
     );
 
     res.status(201).json({ success: true, message: 'Device registered and pending admin approval.', data: { id: result.insertId } });

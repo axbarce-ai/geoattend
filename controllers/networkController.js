@@ -7,7 +7,7 @@ const { logAction } = require('../services/auditService');
 // doesn't lock every employee out before an admin has set this up.
 async function checkEmployeeNetwork(req, res, next) {
   try {
-    const ip = networkService.getClientIp(req);
+    const ip = await networkService.resolveClientIp(req);
     const entries = await networkService.getAllowedEntries();
     const enforced = entries.length > 0;
     res.json({
@@ -25,7 +25,7 @@ async function checkEmployeeNetwork(req, res, next) {
 async function getSettings(req, res, next) {
   try {
     const entries = await networkService.getAllowedEntries();
-    res.json({ success: true, data: { allowed_ips: entries, your_ip: networkService.getClientIp(req) } });
+    res.json({ success: true, data: { allowed_ips: entries, your_ip: await networkService.resolveClientIp(req) } });
   } catch (err) {
     next(err);
   }

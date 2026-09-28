@@ -197,7 +197,7 @@ No new packages.
    - **Position** changed from free text to a dropdown with a starter list
      of common CSPC academic/administrative titles (Instructor I-III,
      Assistant/Associate Professor, Professor, Department Dean, Program
-     Chair, Registrar Staff, Administrative Aide I-III, Security Guard,
+     Chair, Registrar Staff, Administrative Aide I-III,
      etc.), plus Others -- adjust `POSITION_OPTIONS` in
      `RegistrationScreen.js` if this list should look different.
    - A returning employee's existing value for any of these three fields

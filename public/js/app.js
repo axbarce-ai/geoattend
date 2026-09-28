@@ -277,10 +277,8 @@ const G_App = {
                         if (!G_App.geofence.map) {
                             G_App.geofence.init();
                         } else {
-                            setTimeout(() => {
-                                google.maps.event.trigger(G_App.geofence.map, 'resize');
-                                G_App.geofence.map.setCenter(G_App.geofence.map.getCenter());
-                            }, 200);
+                            // Back to the CSPC default view (unless mid-edit), after the view is visible.
+                            setTimeout(() => G_App.geofence.onPageOpen(), 200);
                         }
                         G_App.geofence.loadAlerts();
                     }
@@ -295,7 +293,10 @@ const G_App = {
                     document.getElementById('app-sidebar').classList.remove('mobile-open');
             return true;
         },
-        toggleDarkMode: () => document.body.classList.toggle('dark-mode'),
+        toggleDarkMode: () => {
+            document.body.classList.toggle('dark-mode');
+            G_App.ui.redrawDashboardCharts();
+        },
         // Auto-refresh: every 30s, silently re-fetch whichever view is
         // currently on screen so stats/tables/charts stay live without the
         // admin needing to manually reload the page.
@@ -373,31 +374,156 @@ const G_App = {
             document.getElementById('view-subtitle').innerText = 'Restricted Access — Identity Verification Only';
             G_App.ui.setViewUrl('verification-section', true);
         },
+        // Chart colours come from the --chart-* CSS tokens, so light and dark
+        // mode each get their own validated steps.
+        chartColors: () => {
+            const css = getComputedStyle(document.body);
+            const v = (name) => css.getPropertyValue(name).trim();
+            return {
+                c1: v('--chart-1'), c2: v('--chart-2'), c3: v('--chart-3'),
+                neutral: v('--chart-neutral'), grid: v('--chart-grid'),
+                text: v('--text-muted'), card: v('--bg-card'), ink: v('--text-main')
+            };
+        },
+        lastStats: null,
         updateDashboard: async () => {
             try {
                 const { data } = await apiFetch('/dashboard/stats');
-                document.getElementById('stat-total').innerText = data.totalEmployees;
-                document.getElementById('stat-present').innerText = data.fullTime;
-                document.getElementById('stat-late').innerText = data.partTime;
-                document.getElementById('stat-absent').innerText = data.inactive;
+                G_App.ui.lastStats = data;
+                const set = (id, value) => { const el = document.getElementById(id); if (el) el.innerText = value; };
+                const fmt = (n) => Number(n || 0).toLocaleString();
 
-                const todayPresentEl = document.getElementById('stat-today-present');
-                if (todayPresentEl) todayPresentEl.innerText = data.todayPresent;
-                const todayLateEl = document.getElementById('stat-today-late');
-                if (todayLateEl) todayLateEl.innerText = data.todayLate;
-                const activeEventsEl = document.getElementById('stat-active-events');
-                if (activeEventsEl) activeEventsEl.innerText = data.activeEvents;
-                const devicesEl = document.getElementById('stat-registered-devices');
-                if (devicesEl) devicesEl.innerText = data.registeredDevices;
+                G_App.ui.renderGreeting();
 
+                // Headline numbers
+                const active = Math.max(0, (data.totalEmployees || 0) - (data.inactive || 0));
+                const checkedIn = (data.todayPresent || 0) + (data.todayLate || 0);
+                set('stat-total', fmt(data.totalEmployees));
+                set('stat-workforce', `${fmt(data.fullTime)} full-time · ${fmt(data.partTime)} part-time · ${fmt(data.inactive)} inactive`);
+                set('stat-today-present', fmt(data.todayPresent));
+                set('stat-today-present-foot', checkedIn ? `${Math.round((data.todayPresent / checkedIn) * 100)}% of today's check-ins` : 'No check-ins yet today');
+                set('stat-today-late', fmt(data.todayLate));
+                set('stat-today-late-foot', checkedIn ? `${Math.round((data.todayLate / checkedIn) * 100)}% of today's check-ins` : 'No check-ins yet today');
+                const rate = active ? Math.min(100, Math.round((checkedIn / active) * 100)) : 0;
+                set('stat-rate', active ? `${rate}%` : '—');
+                set('stat-rate-foot', active ? `${fmt(checkedIn)} of ${fmt(active)} active employees checked in` : 'No active employees yet');
+                const bar = document.getElementById('stat-rate-bar');
+                if (bar) bar.style.width = `${rate}%`;
+
+                // Secondary counts
+                set('stat-active-events', fmt(data.activeEvents));
+                set('stat-active-geofences', fmt(data.activeGeofences));
+                set('stat-registered-devices', fmt(data.registeredDevices));
+                set('stat-departments', fmt(data.departments));
+
+                G_App.ui.renderLiveEvents(data.ongoingEvents || [], active);
+                G_App.ui.renderAttention(data);
+                G_App.ui.renderTrendChart(data.trend || []);
                 G_App.ui.initClassificationChart(data.classificationBreakdown);
                 await G_App.ui.populateDeptEventFilter();
                 await G_App.ui.loadDepartmentAttendanceChart();
                 G_App.ui.loadRecentActivity();
                 G_App.ui.loadUpcomingEvents();
+                lucide.createIcons();
             } catch (err) {
                 toast(err.message, 'error');
             }
+        },
+        renderGreeting: () => {
+            let name = 'Admin';
+            try { name = (JSON.parse(localStorage.getItem('ga_admin') || '{}').full_name || 'Admin').split(' ')[0]; } catch (e) { /* keep default */ }
+            const now = new Date();
+            const h = now.getHours();
+            const part = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+            const greet = document.getElementById('dash-greeting');
+            if (greet) greet.innerText = `${part}, ${name}`;
+            const date = document.getElementById('dash-date');
+            if (date) date.innerText = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+        },
+        // Cards for events running right now; clicking one opens its attendance.
+        renderLiveEvents: (events, activeEmployees) => {
+            const wrap = document.getElementById('dash-live-events');
+            const chip = document.getElementById('dash-live-chip');
+            const chipText = document.getElementById('dash-live-text');
+            if (chip) chip.classList.toggle('is-live', events.length > 0);
+            if (chipText) chipText.innerText = events.length ? `${events.length} event${events.length === 1 ? '' : 's'} live now` : 'No events live right now';
+            if (!wrap) return;
+            wrap.hidden = !events.length;
+            wrap.innerHTML = events.map(e => {
+                const pct = activeEmployees ? Math.min(100, Math.round((e.checked_in / activeEmployees) * 100)) : 0;
+                const ends = new Date(e.end_datetime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                return `
+                    <button type="button" class="dash-live-card" data-id="${Number(e.id)}" data-title="${escapeHtml(e.title)}" onclick="G_App.ui.openLiveEvent(this)">
+                        <span class="dash-live-tag"><span class="dash-live-dot" style="background:var(--success)"></span>Live · ends ${escapeHtml(ends)}</span>
+                        <h4>${escapeHtml(e.title)}</h4>
+                        <p>${escapeHtml(e.venue || 'No venue set')}</p>
+                        <div class="dash-live-count"><span>Checked in</span><span>${Number(e.checked_in)} / ${activeEmployees}</span></div>
+                        <div class="dash-meter"><span style="width:${pct}%"></span></div>
+                    </button>`;
+            }).join('');
+        },
+        openLiveEvent: (btn) => {
+            G_App.ui.switchView('attendance');
+            G_App.attendance.openEvent(Number(btn.dataset.id), btn.dataset.title);
+        },
+        // Items waiting on an admin; each opens the page where it's handled.
+        renderAttention: (data) => {
+            const list = document.getElementById('dash-attention');
+            if (!list) return;
+            const items = [
+                { n: data.pendingDevices, icon: 'smartphone', sev: 'warn', title: 'Devices awaiting approval', sub: 'New phones registered by employees', view: 'mobile-app' },
+                { n: data.openAnomalies, icon: 'map-pin-off', sev: 'crit', title: 'Unresolved geo anomalies', sub: 'Possible shared-phone check-ins', view: 'attendance' },
+                { n: data.lockedFaces, icon: 'lock', sev: 'crit', title: 'Face verification locked', sub: 'Too many failed selfie matches', view: 'employees' }
+            ].filter(i => i.n > 0);
+            list.innerHTML = items.length
+                ? items.map(i => `
+                    <li class="dash-attn-item">
+                        <button type="button" onclick="G_App.ui.switchView('${i.view}')">
+                            <span class="dash-attn-icon sev-${i.sev}"><i data-lucide="${i.icon}"></i></span>
+                            <span class="dash-attn-text"><b>${i.title}</b><span>${i.sub}</span></span>
+                            <span class="dash-attn-count">${Number(i.n)}</span>
+                        </button>
+                    </li>`).join('')
+                : `<li class="dash-attn-item">
+                        <span class="dash-attn-icon sev-ok"><i data-lucide="check"></i></span>
+                        <span class="dash-attn-text"><b>All caught up</b><span>No devices, anomalies or locked accounts waiting.</span></span>
+                   </li>`;
+        },
+        // Present / Late per day, stacked columns.
+        renderTrendChart: (trend) => {
+            const canvas = document.getElementById('dashTrendChart');
+            if (!canvas) return;
+            const c = G_App.ui.chartColors();
+            if (window.dashTrendChart && typeof window.dashTrendChart.destroy === 'function') window.dashTrendChart.destroy();
+            const empty = document.getElementById('dash-trend-empty');
+            if (empty) empty.hidden = trend.some(d => d.present || d.late);
+            const todayKey = trend.length ? trend[trend.length - 1].date : '';
+            const labels = trend.map(d => {
+                const dt = new Date(`${d.date}T00:00:00`);
+                return d.date === todayKey ? 'Today' : dt.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
+            });
+            window.dashTrendChart = new Chart(canvas.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        { label: 'Present', data: trend.map(d => d.present), backgroundColor: c.c1, borderColor: c.card, borderWidth: { top: 2 }, borderRadius: 4, borderSkipped: 'bottom', maxBarThickness: 34, stack: 'day' },
+                        { label: 'Late', data: trend.map(d => d.late), backgroundColor: c.c3, borderColor: c.card, borderWidth: { bottom: 2 }, borderRadius: 4, borderSkipped: 'bottom', maxBarThickness: 34, stack: 'day' }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { callbacks: { footer: (items) => `Total: ${items.reduce((s, i) => s + i.parsed.y, 0)}` } }
+                    },
+                    scales: {
+                        x: { stacked: true, grid: { display: false }, border: { display: false }, ticks: { color: c.text, font: { size: 11, weight: '600' } } },
+                        y: { stacked: true, beginAtZero: true, grid: { color: c.grid }, border: { display: false }, ticks: { color: c.text, precision: 0, font: { size: 11 } }, suggestedMax: 5 }
+                    }
+                }
+            });
         },
         // Small helper: turns an audit_logs "module" into an icon + human label
         // so the feed reads naturally instead of showing raw enum-ish strings.
@@ -439,11 +565,15 @@ const G_App = {
                 container.innerHTML = data.length ? data.map(e => {
                     const start = new Date(e.start_datetime);
                     return `
-                        <div class="mini-event-item">
-                            <div><h5>${e.title}</h5><span>${e.venue || 'TBA'}</span></div>
-                            <span>${start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        <div class="dash-event-row">
+                            <div class="dash-event-date"><small>${start.toLocaleDateString(undefined, { month: 'short' })}</small><b>${start.getDate()}</b></div>
+                            <div class="dash-event-info">
+                                <h5>${escapeHtml(e.title)}</h5>
+                                <span>${start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · ${escapeHtml(e.venue || 'Venue TBA')}</span>
+                            </div>
                         </div>`;
-                }).join('') : '<div class="mini-event-item"><h5>Nothing scheduled.</h5></div>';
+                }).join('') : '<div class="dash-empty-state"><i data-lucide="calendar-x"></i>Nothing scheduled yet.</div>';
+                lucide.createIcons();
             } catch (err) { /* non-fatal */ }
         },
         populateDeptEventFilter: async () => {
@@ -456,28 +586,46 @@ const G_App = {
                 sel.dataset.loaded = '1';
             } catch (err) { /* non-fatal */ }
         },
+        // Doughnut + an HTML legend with counts and shares (identity is never colour alone).
         initClassificationChart: (breakdown) => {
             const canvas = document.getElementById('classificationChart');
             if (!canvas || !breakdown) return;
-            const ctx = canvas.getContext('2d');
-            if (window.classificationChart && typeof window.classificationChart.destroy === 'function') {
-                window.classificationChart.destroy();
-            }
-            window.classificationChart = new Chart(ctx, {
+            const c = G_App.ui.chartColors();
+            const slices = [
+                { label: 'Permanent', value: breakdown.Permanent || 0, color: c.c1 },
+                { label: 'COS', value: breakdown.COS || 0, color: c.c2 },
+                { label: 'Casual / Job Order', value: breakdown['Casual/Job Order'] || 0, color: c.c3 },
+                { label: 'Other', value: breakdown.Other || 0, color: c.neutral }
+            ];
+            const total = slices.reduce((s, x) => s + x.value, 0);
+            const totalEl = document.getElementById('dash-donut-total');
+            if (totalEl) totalEl.innerText = total.toLocaleString();
+            const legend = document.getElementById('dash-donut-legend');
+            if (legend) legend.innerHTML = slices.map(s => `
+                <li><i class="dash-swatch" style="background:${s.color}"></i><span>${s.label}</span><em><strong>${s.value}</strong>${total ? ` · ${Math.round((s.value / total) * 100)}%` : ''}</em></li>
+            `).join('');
+            if (window.classificationChart && typeof window.classificationChart.destroy === 'function') window.classificationChart.destroy();
+            window.classificationChart = new Chart(canvas.getContext('2d'), {
                 type: 'doughnut',
                 data: {
-                    labels: ['Permanent', 'COS', 'Casual/Job Order', 'Other'],
+                    labels: slices.map(s => s.label),
                     datasets: [{
-                        data: [breakdown.Permanent || 0, breakdown.COS || 0, breakdown['Casual/Job Order'] || 0, breakdown.Other || 0],
-                        backgroundColor: ['#0D00A5', '#4318FF', '#FFB547', '#A3AED0']
+                        // An empty ring (all zero) still draws as a neutral track.
+                        data: total ? slices.map(s => s.value) : [1],
+                        backgroundColor: total ? slices.map(s => s.color) : [c.grid],
+                        borderColor: c.card, borderWidth: 2, hoverOffset: total ? 4 : 0
                     }]
                 },
-                options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+                options: {
+                    responsive: true, maintainAspectRatio: true, cutout: '72%',
+                    plugins: { legend: { display: false }, tooltip: { enabled: total > 0 } }
+                }
             });
         },
+        // Attended out of total, one bar per department (HTML, so long names never collide).
         loadDepartmentAttendanceChart: async () => {
-            const canvas = document.getElementById('deptAttendanceChart');
-            if (!canvas) return;
+            const list = document.getElementById('dash-dept-list');
+            if (!list) return;
             const eventId = document.getElementById('dash-dept-event') ? document.getElementById('dash-dept-event').value : '';
             const classification = document.getElementById('dash-dept-classification') ? document.getElementById('dash-dept-classification').value : 'all';
             try {
@@ -485,22 +633,56 @@ const G_App = {
                 if (eventId) params.set('event_id', eventId);
                 if (classification && classification !== 'all') params.set('classification', classification);
                 const { data } = await apiFetch(`/dashboard/department-attendance?${params.toString()}`);
-                const ctx = canvas.getContext('2d');
-                if (window.deptAttendanceChart && typeof window.deptAttendanceChart.destroy === 'function') {
-                    window.deptAttendanceChart.destroy();
-                }
-                window.deptAttendanceChart = new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: data.map(d => d.department),
-                        datasets: [
-                            { label: 'Total Employees', data: data.map(d => d.total_employees), backgroundColor: '#CBD5E1', borderRadius: 6 },
-                            { label: 'Attended', data: data.map(d => d.attended), backgroundColor: '#05CD99', borderRadius: 6 }
-                        ]
-                    },
-                    options: { responsive: true, plugins: { legend: { position: 'bottom' } }, scales: { y: { beginAtZero: true } } }
-                });
+                const rows = [...data].sort((a, b) => (b.total_employees ? b.attended / b.total_employees : -1) - (a.total_employees ? a.attended / a.total_employees : -1));
+                G_App.ui.deptRows = rows;
+                G_App.ui.renderDepartmentRows();
             } catch (err) { toast(err.message, 'error'); }
+        },
+        // Departments with employees first; empty ones and anything past the
+        // first few stay behind "Show all" so the panel doesn't run off the page.
+        DEPT_PREVIEW_COUNT: 6,
+        deptShowAll: false,
+        toggleDepartmentRows: () => {
+            G_App.ui.deptShowAll = !G_App.ui.deptShowAll;
+            G_App.ui.renderDepartmentRows();
+        },
+        renderDepartmentRows: () => {
+            const list = document.getElementById('dash-dept-list');
+            const rows = G_App.ui.deptRows || [];
+            if (!list) return;
+            if (!rows.length) {
+                list.innerHTML = '<div class="dash-empty-state"><i data-lucide="building-2"></i>Add departments to see attendance by department.</div>';
+                lucide.createIcons();
+                return;
+            }
+            const staffed = rows.filter(d => d.total_employees > 0);
+            const shown = G_App.ui.deptShowAll ? rows : staffed.slice(0, G_App.ui.DEPT_PREVIEW_COUNT);
+            const hidden = rows.length - shown.length;
+            const emptyCount = rows.length - staffed.length;
+            const html = shown.map(d => {
+                const pct = d.total_employees ? Math.round((d.attended / d.total_employees) * 100) : 0;
+                const tone = pct >= 75 ? 'is-high' : pct >= 40 ? 'is-mid' : 'is-low';
+                return `
+                    <div class="dash-dept-row" title="${escapeHtml(d.department)}: ${d.attended} of ${d.total_employees} attended">
+                        <div class="dash-dept-row-top"><b>${escapeHtml(d.department)}</b><span><strong>${d.attended}</strong> / ${d.total_employees}${d.total_employees ? `<em>${pct}%</em>` : ' · no employees'}</span></div>
+                        <div class="dash-dept-bar"><span class="${tone}" style="width:${pct}%"></span></div>
+                    </div>`;
+            }).join('');
+            const note = G_App.ui.deptShowAll
+                ? 'Showing all departments'
+                : `${hidden} more${emptyCount ? ` (${emptyCount} with no employees)` : ''}`;
+            const more = (hidden > 0 || G_App.ui.deptShowAll) && rows.length > Math.min(staffed.length, G_App.ui.DEPT_PREVIEW_COUNT)
+                ? `<div class="dash-dept-more"><span>${note}</span><button type="button" class="dash-link" onclick="G_App.ui.toggleDepartmentRows()">${G_App.ui.deptShowAll ? 'Show less' : 'Show all'} <i data-lucide="${G_App.ui.deptShowAll ? 'chevron-up' : 'chevron-down'}"></i></button></div>`
+                : '';
+            list.innerHTML = (html || '<div class="dash-empty-state"><i data-lucide="users"></i>No employees in any department yet.</div>') + more;
+            lucide.createIcons();
+        },
+        // Charts read their colours when drawn, so redraw after a theme switch.
+        redrawDashboardCharts: () => {
+            const s = G_App.ui.lastStats;
+            if (!s) return;
+            G_App.ui.renderTrendChart(s.trend || []);
+            G_App.ui.initClassificationChart(s.classificationBreakdown);
         }
     },
 
@@ -518,27 +700,50 @@ const G_App = {
         },
         render: async () => {
             await G_App.departments.load();
-            const data = G_App.state.departments || [];
+            G_App.departments.renderTable();
+        },
+        // Draws the table from the loaded list, filtered by the search box
+        // (department name, office or description).
+        renderTable: () => {
+            const all = G_App.state.departments || [];
+            const searchEl = document.getElementById('departments-search');
+            const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
+            const data = q ? all.filter(d => `${d.name || ''} ${d.office || ''} ${d.description || ''}`.toLowerCase().includes(q)) : all;
             const tbody = document.getElementById('departments-table-body');
             if (!tbody) return;
+            if (!data.length && all.length) {
+                tbody.innerHTML = `<tr><td colspan="4" style="color:var(--text-muted); text-align:center; padding:20px;">No departments match "${escapeHtml(q)}".</td></tr>`;
+                return;
+            }
             tbody.innerHTML = data.map(d => `
                 <tr>
-                    <td><b>${d.name}</b></td>
-                    <td>${d.office || '—'}</td>
+                    <td><button type="button" class="dept-link" title="View employees" onclick="G_App.departments.showMembers(${d.id})"><b>${escapeHtml(d.name)}</b></button></td>
+                    <td><button type="button" class="dept-link" title="View employees" onclick="G_App.departments.showMembers(${d.id})">${escapeHtml(d.office || '—')}</button></td>
                     <td>${d.employee_count || 0}</td>
-                    <td><button class="btn-primary" style="background:var(--danger); padding:6px 12px; font-size:0.75rem;" onclick="G_App.departments.remove(${d.id}, '${(d.name || '').replace(/'/g, "\\'")}')">Delete</button></td>
+                    <td>
+                        <div class="row-actions">
+                            <button class="btn-icon btn-edit" title="Edit department" aria-label="Edit department" onclick="G_App.departments.openModal(${d.id})"><i data-lucide="edit-3" size="14"></i></button>
+                            <button class="btn-icon btn-delete" title="Delete department" aria-label="Delete department" onclick="G_App.departments.remove(${d.id}, '${(d.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')"><i data-lucide="trash" size="14"></i></button>
+                        </div>
+                    </td>
                 </tr>
             `).join('') || '<tr><td colspan="4" style="color:var(--text-muted); text-align:center; padding:20px;">No departments yet. Click "Add Department" to create one.</td></tr>';
             lucide.createIcons();
         },
-        openModal: () => {
-            document.getElementById('dept-name').value = '';
-            document.getElementById('dept-office').value = '';
-            document.getElementById('dept-description').value = '';
+        // With an id, opens the same modal to edit that department.
+        openModal: (id = null) => {
+            const d = id ? (G_App.state.departments || []).find(x => x.id === id) : null;
+            document.getElementById('dept-id').value = d ? d.id : '';
+            document.getElementById('dept-modal-title').innerText = d ? 'Edit Department' : 'Add Department';
+            document.getElementById('dept-save-btn').innerText = d ? 'Save Changes' : 'Save Department';
+            document.getElementById('dept-name').value = d ? d.name : '';
+            document.getElementById('dept-office').value = d && d.office !== d.name ? (d.office || '') : '';
+            document.getElementById('dept-description').value = d ? (d.description || '') : '';
             document.getElementById('dept-modal').classList.add('open');
         },
         closeModal: () => document.getElementById('dept-modal').classList.remove('open'),
         save: async () => {
+            const id = document.getElementById('dept-id').value;
             const name = document.getElementById('dept-name').value.trim();
             if (!name) return toast('Department name is required.', 'error');
             const payload = {
@@ -547,18 +752,48 @@ const G_App = {
                 description: document.getElementById('dept-description').value.trim() || undefined
             };
             try {
-                await apiFetch('/departments', { method: 'POST', body: JSON.stringify(payload) });
-                toast('Department created.', 'success');
+                await apiFetch(id ? `/departments/${id}` : '/departments', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+                toast(id ? 'Department updated.' : 'Department created.', 'success');
                 G_App.departments.closeModal();
                 await G_App.departments.load();
                 if (document.getElementById('departments').classList.contains('active')) G_App.departments.render();
-                // If they were mid-way through registering a member, pre-select the department they just added.
-                const deptSelect = document.getElementById('inp-dept');
-                if (deptSelect) deptSelect.value = name;
+                if (id) {
+                    G_App.employees.load(); // the Employees list shows department names
+                } else {
+                    // If they were mid-way through registering a member, pre-select the department they just added.
+                    const deptSelect = document.getElementById('inp-dept');
+                    if (deptSelect) deptSelect.value = name;
+                }
             } catch (err) {
                 toast(err.message, 'error');
             }
         },
+        // Lists the department's employees in a modal (clicked from its name or office).
+        showMembers: async (id) => {
+            const d = (G_App.state.departments || []).find(x => x.id === id);
+            if (!d) return;
+            document.getElementById('dept-members-title').innerText = d.name;
+            document.getElementById('dept-members-sub').innerText = d.office && d.office !== d.name ? `Office: ${d.office}` : '';
+            const body = document.getElementById('dept-members-body');
+            body.innerHTML = '<tr><td colspan="5" class="ev-empty">Loading employees…</td></tr>';
+            document.getElementById('dept-members-modal').classList.add('open');
+            try {
+                const { data, pagination } = await apiFetch(`/employees?department=${encodeURIComponent(d.name)}&limit=1000`);
+                document.getElementById('dept-members-count').innerText = `${pagination.total} employee${pagination.total === 1 ? '' : 's'}`;
+                body.innerHTML = data.map(e => `
+                    <tr>
+                        <td><span style="font-weight:700;">${escapeHtml(e.full_name)}</span></td>
+                        <td>${escapeHtml(e.employee_code)}</td>
+                        <td>${escapeHtml(e.position || '—')}</td>
+                        <td>${escapeHtml(e.classification || '—')}</td>
+                        <td><span class="badge badge-${e.status === 'Inactive' ? 'danger' : 'success'}">${escapeHtml(e.status)}</span></td>
+                    </tr>
+                `).join('') || '<tr><td colspan="5" class="ev-empty">No employees in this department yet.</td></tr>';
+            } catch (err) {
+                body.innerHTML = `<tr><td colspan="5" class="ev-empty">${escapeHtml(err.message)}</td></tr>`;
+            }
+        },
+        closeMembers: () => document.getElementById('dept-members-modal').classList.remove('open'),
         remove: async (id, name) => {
             if (!(await confirmDialog({ title: 'Delete department?', message: `**${name}** will be permanently deleted. This cannot be undone.` }))) return;
             try {
@@ -568,6 +803,110 @@ const G_App = {
             } catch (err) {
                 toast(err.message, 'error');
             }
+        }
+    },
+
+    // The employee form's Position / Classification lists, kept server-side
+    // (see employeeOptionController.js). The options written in dashboard.ejs
+    // are only a fallback until they load. The "+ Add new" modal lists every
+    // entry with a delete button and adds new ones.
+    employeeOptions: {
+        lists: { position: [], classification: [] },
+        kind: 'position',
+        selectId: (kind) => kind === 'position' ? 'inp-position' : 'inp-classification',
+        load: async () => {
+            try {
+                const { data } = await apiFetch('/employee-options');
+                G_App.employeeOptions.lists = { position: data.positions || [], classification: data.classifications || [] };
+                G_App.employeeOptions.apply('position');
+                G_App.employeeOptions.apply('classification');
+            } catch (err) { /* keep the built-in lists */ }
+        },
+        // Rebuilds a dropdown from the list, keeping the "Select position"
+        // placeholder, the "Others" option, and the current value.
+        apply: (kind) => {
+            const select = document.getElementById(G_App.employeeOptions.selectId(kind));
+            if (!select) return;
+            const current = select.value;
+            [...select.options].filter(o => o.value !== '' && o.value !== 'Others').forEach(o => o.remove());
+            const others = select.querySelector('option[value="Others"]');
+            G_App.employeeOptions.lists[kind].forEach(v => {
+                const opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = v;
+                select.insertBefore(opt, others);
+            });
+            if ([...select.options].some(o => o.value === current)) select.value = current;
+        },
+        openModal: (kind) => {
+            const eo = G_App.employeeOptions;
+            eo.kind = kind;
+            const label = kind === 'position' ? 'Position' : 'Classification';
+            document.getElementById('opt-modal-title').innerText = `Add ${label}`;
+            document.getElementById('opt-input-label').innerText = `${label} name`;
+            document.getElementById('opt-input').placeholder = kind === 'position' ? 'e.g. Instructor IV' : 'e.g. Casual Academic';
+            document.getElementById('opt-input').value = '';
+            document.getElementById('opt-input').maxLength = kind === 'position' ? 120 : 50; // employees column sizes
+            eo.renderList();
+            document.getElementById('opt-modal').classList.add('open');
+            setTimeout(() => document.getElementById('opt-input').focus(), 50);
+        },
+        closeModal: () => document.getElementById('opt-modal').classList.remove('open'),
+        renderList: () => {
+            const eo = G_App.employeeOptions;
+            const list = eo.lists[eo.kind];
+            document.getElementById('opt-list').innerHTML = list.length
+                ? list.map((v, i) => `
+                    <li class="opt-item">
+                        <span>${escapeHtml(v)}</span>
+                        <button type="button" class="btn-icon btn-delete" title="Delete" aria-label="Delete ${escapeHtml(v)}" onclick="G_App.employeeOptions.remove(${i})"><i data-lucide="trash-2" size="12"></i></button>
+                    </li>`).join('')
+                : '<li class="opt-empty">The list is empty. Add one above.</li>';
+            const label = eo.kind === 'position' ? 'positions' : 'classifications';
+            document.getElementById('opt-list-title').innerText = `All ${label} (${list.length})`;
+            lucide.createIcons();
+        },
+        save: async () => {
+            const eo = G_App.employeeOptions;
+            const kind = eo.kind;
+            const value = document.getElementById('opt-input').value.trim();
+            if (!value) return toast(`Enter a ${kind} name.`, 'error');
+            const select = document.getElementById(eo.selectId(kind));
+            const existing = [...select.options].find(o => o.value.toLowerCase() === value.toLowerCase());
+            if (existing) {
+                select.value = existing.value;
+                G_App.employees.toggleOther(select.id);
+                eo.closeModal();
+                return toast(`"${existing.value}" is already in the list, so it's been selected.`, 'info');
+            }
+            try {
+                const { data } = await apiFetch(`/employee-options/${kind}`, { method: 'POST', body: JSON.stringify({ value }) });
+                eo.lists[kind] = data;
+                eo.apply(kind);
+                // Pre-select what they just added, same as "+ Add new" for departments.
+                select.value = value;
+                G_App.employees.toggleOther(select.id);
+                toast(`${value} added.`, 'success');
+                eo.closeModal();
+            } catch (err) { toast(err.message, 'error'); }
+        },
+        remove: async (index) => {
+            const eo = G_App.employeeOptions;
+            const kind = eo.kind;
+            const value = eo.lists[kind][index];
+            if (value == null) return;
+            const ok = await confirmDialog({
+                title: `Delete this ${kind}?`,
+                message: `**${value}** will be removed from the dropdown. Employees who already have it keep it.`
+            });
+            if (!ok) return;
+            try {
+                const { data } = await apiFetch(`/employee-options/${kind}`, { method: 'DELETE', body: JSON.stringify({ value }) });
+                eo.lists[kind] = data;
+                eo.apply(kind);
+                eo.renderList();
+                toast(`${value} deleted.`, 'success');
+            } catch (err) { toast(err.message, 'error'); }
         }
     },
 
@@ -605,7 +944,12 @@ const G_App = {
                 const devices = data.filter(d => d.employee_id == employeeId);
                 if (!devices.length || document.getElementById('inp-id').value != employeeId) return;
                 box.innerHTML = devices.map(d => `
-                    <div style="background: var(--primary-light); border-radius: 12px; padding: 14px 16px; margin-bottom: 8px; font-family: monospace; font-size: 0.8rem; line-height: 1.6; white-space: pre-line;">${escapeHtml(`MODEL: ${d.model || 'Unknown'}\nBRAND: ${d.brand || 'Unknown'}\nOS: ${d.os || 'Unknown'}\nDEVICE ID: ${d.device_uid || 'unknown-device'}`)}</div>
+                    <dl class="emp-device">
+                        <div><dt>Model</dt><dd>${escapeHtml(d.model || 'Unknown')}</dd></div>
+                        <div><dt>Brand</dt><dd>${escapeHtml(d.brand || 'Unknown')}</dd></div>
+                        <div><dt>OS</dt><dd>${escapeHtml(d.os || 'Unknown')}</dd></div>
+                        <div><dt>Device ID</dt><dd class="emp-device-id">${escapeHtml(d.device_uid || 'unknown-device')}</dd></div>
+                    </dl>
                 `).join('');
                 wrap.style.display = '';
             } catch (err) { /* e.g. not a super admin -- leave the section hidden */ }
@@ -654,6 +998,7 @@ const G_App = {
                 saveBtn.onclick = () => G_App.employees.save();
                 G_App.employees.renderDeviceInfo(null);
             }
+            modal.querySelector('.emp-modal-body').scrollTop = 0;
             modal.classList.add('open');
         },
         closeModal: () => document.getElementById('crud-modal').classList.remove('open'),
@@ -786,9 +1131,11 @@ const G_App = {
                         </select>
                     </td>
                     <td>
-                        <button class="btn-icon btn-edit" onclick="G_App.employees.openModal(${e.id})"><i data-lucide="edit-3" size="14"></i></button>
-                        ${isLocked ? `<button class="btn-icon" title="Unlock DoubleSafe face verification" onclick="G_App.employees.unlockFace(${e.id})"><i data-lucide="unlock" size="14"></i></button>` : ''}
-                        <button class="btn-icon btn-delete" onclick="G_App.employees.delete(${e.id})"><i data-lucide="trash" size="14"></i></button>
+                        <div class="row-actions">
+                            <button class="btn-icon btn-edit" title="Edit employee" aria-label="Edit employee" onclick="G_App.employees.openModal(${e.id})"><i data-lucide="edit-3" size="14"></i></button>
+                            ${isLocked ? `<button class="btn-icon" title="Unlock DoubleSafe face verification" aria-label="Unlock face verification" onclick="G_App.employees.unlockFace(${e.id})"><i data-lucide="unlock" size="14"></i></button>` : ''}
+                            <button class="btn-icon btn-delete" title="Delete employee" aria-label="Delete employee" onclick="G_App.employees.delete(${e.id})"><i data-lucide="trash" size="14"></i></button>
+                        </div>
                     </td>
                 </tr>
             `;}).join('') || '<tr><td colspan="8" style="text-align:center; padding:20px; color:var(--text-muted);">No employees yet.</td></tr>';
@@ -1032,7 +1379,7 @@ const G_App = {
             }
             G_App.geofence.map = new google.maps.Map(document.getElementById('geo-map'), {
                 center: { lat: 13.4059, lng: 123.3758 }, // CSPC — overridden below once /default-location resolves
-                zoom: 16,
+                zoom: 18,
                 mapTypeControl: true,
                 streetViewControl: false,
                 fullscreenControl: false
@@ -1049,17 +1396,37 @@ const G_App = {
             try {
                 const { data } = await apiFetch('/geofences/default-location');
                 G_App.geofence.defaultLocation = data;
-                if (G_App.geofence.map) G_App.geofence.map.setCenter({ lat: data.lat, lng: data.lng });
+                G_App.geofence.showDefaultView();
             } catch (err) { /* non-fatal — falls back to the hardcoded CSPC coordinates already set as the map center */ }
         },
+        // Moves the map to the CSPC default view (center + zoom). Used when the
+        // Geo-Fences page opens and by "Use CSPC Default Location".
+        showDefaultView: () => {
+            const map = G_App.geofence.map;
+            if (!map) return;
+            const loc = G_App.geofence.defaultLocation || { lat: 13.4059, lng: 123.3758, zoom: 18 };
+            map.setCenter({ lat: Number(loc.lat), lng: Number(loc.lng) });
+            map.setZoom(Number(loc.zoom) || 18);
+        },
+        // Called each time the Geo-Fences page is opened. Leaves the map alone
+        // while a boundary is being drawn or an event edited, so switching away
+        // and back doesn't lose the admin's place.
+        onPageOpen: () => {
+            const map = G_App.geofence.map;
+            if (!map) return;
+            google.maps.event.trigger(map, 'resize');
+            const busy = (G_App.geofence.drawMarkers || []).length > 0 || !!document.getElementById('gf-id').value;
+            if (!busy) G_App.geofence.showDefaultView();
+        },
         // "Use CSPC Default Location" button — fills the lat/lng fields with CSPC's
-        // coordinates (the system's configured default Geo-Fence location).
+        // coordinates (the system's configured default Geo-Fence location) and
+        // shows the CSPC default map view.
         useCspcDefault: () => {
-            const loc = G_App.geofence.defaultLocation || { lat: 13.4059000, lng: 123.3758000, label: 'CSPC' };
-            document.getElementById('gf-lat').value = loc.lat.toFixed(7);
-            document.getElementById('gf-lng').value = loc.lng.toFixed(7);
+            const loc = G_App.geofence.defaultLocation || { lat: 13.4059000, lng: 123.3758000, label: 'CSPC', zoom: 18 };
+            document.getElementById('gf-lat').value = Number(loc.lat).toFixed(7);
+            document.getElementById('gf-lng').value = Number(loc.lng).toFixed(7);
             G_App.geofence.dropCenterMarker(loc.lat, loc.lng);
-            G_App.geofence.focusOn(loc.lat, loc.lng);
+            G_App.geofence.showDefaultView();
             if (!document.getElementById('gf-venue').value) document.getElementById('gf-venue').value = loc.label || 'CSPC';
             toast('CSPC default location applied.', 'success');
         },
@@ -1327,6 +1694,10 @@ const G_App = {
             G_App.geofence.polygonLayers = [];
             G_App.state.geofences.forEach(gf => {
                 if (!gf.points || gf.points.length < 3) return;
+                // An expired event's boundary no longer applies, so it's left off
+                // the map. The 30s auto-refresh drops it shortly after it ends; the
+                // event stays in the list (marked EXPIRED) for editing/deleting.
+                if (gf.computed_status === 'expired') return;
                 const polygon = new google.maps.Polygon({
                     paths: gf.points.map(p => ({ lat: p.lat, lng: p.lng })),
                     strokeColor: gf.computed_status === 'active' ? '#05CD99' : '#0D00A5',
@@ -2101,9 +2472,11 @@ const G_App = {
                         <td>${isMatch && r.position ? escapeHtml(r.position) : '<span class="vf-cell-muted">—</span>'}</td>
                         <td><span class="badge badge-${isMatch ? 'success' : 'danger'}">${isMatch ? 'Match' : 'No match'}</span></td>
                         <td class="vf-cell-when">${G_App.verification.fullWhen(r.created_at)}</td>
+                        <td class="vf-col-actions"><button type="button" class="btn-icon btn-delete" title="Delete scan" aria-label="Delete scan" onclick="G_App.verification.deleteRecord('ocr', ${Number(r.id)})"><i data-lucide="trash-2" size="12"></i></button></td>
                     </tr>
                 `;
-                }).join('') || '<tr><td colspan="6" class="ev-empty">No ID scans yet.</td></tr>';
+                }).join('') || '<tr><td colspan="7" class="ev-empty">No ID scans yet.</td></tr>';
+                lucide.createIcons();
             } catch (err) { /* silent */ }
         }
     },
@@ -2145,11 +2518,26 @@ const G_App = {
         },
         // Called by loadRecords with the newest record; toasts when it's new
         // since the last refresh (not on the first load).
+        // Deletes one row from Recent ID Scans ('ocr') or Recent Face Checks ('face').
+        deleteRecord: async (kind, id) => {
+            const label = kind === 'ocr' ? 'ID scan' : 'face check';
+            const ok = await confirmDialog({
+                title: `Delete this ${label}?`,
+                message: `The ${label} and its photo will be removed from the log. Any attendance already recorded from it stays. This cannot be undone.`
+            });
+            if (!ok) return;
+            try {
+                await apiFetch(`/${kind}/records/${id}`, { method: 'DELETE' });
+                toast(`${label.charAt(0).toUpperCase() + label.slice(1)} deleted.`, 'success');
+                await (kind === 'ocr' ? G_App.ocr : G_App.face).loadRecords();
+            } catch (err) { toast(err.message, 'error'); }
+        },
         announce: (kind, newest) => {
             if (!newest) return;
             const prev = G_App.verification.lastSeen[kind];
             G_App.verification.lastSeen[kind] = newest.id;
-            if (prev == null || newest.id === prev) return;
+            // Only a higher id is a new photo; a lower one means the newest row was deleted.
+            if (prev == null || newest.id <= prev) return;
             const who = newest.full_name || newest.employee_code || newest.extracted_employee_code || 'Unknown';
             const what = kind === 'ocr' ? 'OCR scan' : (newest.source === 'mobile_anomaly' ? 'Mobile face verification' : 'Kiosk face check');
             toast(`New ${what} photo: ${who}`, 'info');
@@ -2614,9 +3002,11 @@ const G_App = {
                         <td><span class="liveness-badge ${r.liveness_verified ? 'pass' : 'fail'}">${r.liveness_verified ? 'Live' : 'N/A'}</span></td>
                         <td><span class="badge badge-${isMatch ? 'success' : 'danger'}">${escapeHtml(resultLabel[r.result] || r.result)}</span></td>
                         <td class="vf-cell-when">${G_App.verification.fullWhen(r.created_at)}</td>
+                        <td class="vf-col-actions"><button type="button" class="btn-icon btn-delete" title="Delete check" aria-label="Delete check" onclick="G_App.verification.deleteRecord('face', ${Number(r.id)})"><i data-lucide="trash-2" size="12"></i></button></td>
                     </tr>
                 `;
-                }).join('') || '<tr><td colspan="7" class="ev-empty">No face checks yet.</td></tr>';
+                }).join('') || '<tr><td colspan="8" class="ev-empty">No face checks yet.</td></tr>';
+                lucide.createIcons();
             } catch (err) { /* silent */ }
         }
     },
@@ -2757,15 +3147,61 @@ const G_App = {
             if (certSel) certSel.innerHTML = G_App.state.employees.map(e => `<option value="${e.id}">${e.full_name} (${e.employee_code})</option>`).join('');
             lucide.createIcons();
         },
+        // Editable certificate wording (school name, title, signatories...).
+        certTemplateFields: ['schoolName', 'accreditation', 'title', 'subtitle', 'awardText', 'defaultVenue',
+            'signatory1Name', 'signatory1Title', 'signatory2Name', 'signatory2Title'],
+        fillCertTemplate: (tpl) => {
+            G_App.settings.certTemplateFields.forEach((k) => {
+                const el = document.getElementById(`cert-tpl-${k}`);
+                if (el) el.value = tpl[k] || '';
+            });
+        },
+        toggleCertTemplate: async () => {
+            const panel = document.getElementById('cert-template-panel');
+            const opening = panel.classList.contains('hidden');
+            panel.classList.toggle('hidden');
+            if (!opening) return;
+            try {
+                const { data } = await apiFetch('/certificates/template');
+                G_App.settings.fillCertTemplate(data);
+            } catch (err) { toast(err.message, 'error'); }
+        },
+        saveCertTemplate: async () => {
+            const body = {};
+            G_App.settings.certTemplateFields.forEach((k) => {
+                body[k] = document.getElementById(`cert-tpl-${k}`).value;
+            });
+            try {
+                const { data } = await apiFetch('/certificates/template', { method: 'PUT', body: JSON.stringify(body) });
+                G_App.settings.fillCertTemplate(data);
+                toast('Certificate text saved.', 'success');
+            } catch (err) { toast(err.message, 'error'); }
+        },
+        resetCertTemplate: async () => {
+            const ok = await confirmDialog({
+                title: 'Reset certificate text?',
+                message: 'All certificate wording goes back to the original CSPC defaults.',
+                confirmText: 'Reset',
+                danger: false
+            });
+            if (!ok) return;
+            try {
+                const { data } = await apiFetch('/certificates/template', { method: 'PUT', body: JSON.stringify({}) });
+                G_App.settings.fillCertTemplate(data);
+                toast('Certificate text reset to default.', 'success');
+            } catch (err) { toast(err.message, 'error'); }
+        },
         generateCertificate: async () => {
             const employeeId = document.getElementById('cert-employee-select').value;
             const event = document.getElementById('cert-event').value || 'Professional Development Workshop';
+            const awardDate = document.getElementById('cert-date').value;
+            const venue = document.getElementById('cert-venue').value.trim();
             if (!employeeId) return toast('Select an employee first.', 'error');
 
             try {
                 const result = await apiFetch('/certificates/generate', {
                     method: 'POST',
-                    body: JSON.stringify({ employee_id: employeeId, event_title: event })
+                    body: JSON.stringify({ employee_id: employeeId, event_title: event, award_date: awardDate, venue })
                 });
                 toast('Certificate generated.', 'success');
                 window.open(result.data.downloadUrl, '_blank');
@@ -3344,6 +3780,7 @@ const G_App = {
         }
 
         await G_App.departments.load();
+        G_App.employeeOptions.load(); // admin-added positions/classifications; not needed before first paint
         await G_App.employees.load();
         G_App.ui.updateDashboard();
         G_App.attendance.render();

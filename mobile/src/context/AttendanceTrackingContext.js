@@ -239,14 +239,18 @@ export function AttendanceTrackingProvider({ children }) {
       const coords = usingPending
         ? { latitude: pending.latitude, longitude: pending.longitude, accuracy: pending.accuracy }
         : locationRef.current;
-      if (!coords) return;
+      if (!coords && !(usingPending && pending.locationOff)) return;
       try {
         const result = await sendHeartbeat(
           attendanceId,
-          coords.latitude,
-          coords.longitude,
+          coords?.latitude,
+          coords?.longitude,
           usingPending ? pending.observedAt : undefined,
-          { accuracy: coords.accuracy, mocked: usingPending ? pending.mocked : mockedRef.current }
+          {
+            accuracy: coords?.accuracy,
+            mocked: usingPending ? pending.mocked : mockedRef.current,
+            locationOff: usingPending && pending.locationOff
+          }
         );
         if (result?.data?.ended) {
           if (usingPending) delete pendingExitRef.current[eventId];
@@ -561,6 +565,81 @@ export function AttendanceTrackingProvider({ children }) {
       Object.keys(heartbeatTimers.current).forEach(stopHeartbeat);
     };
   }, [trackingEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Location/GPS switched off while a session is open: the app can no longer
+  // show the employee is inside, so the duration must stop right now and
+  // only resume once Location is back on (a fresh auto time-in). Every open
+  // session is frozen at this moment (pendingExitAt) and the server is told
+  // to close it at that same time -- retried here, since the main tracking
+  // loop and its heartbeats are stopped while Location is off. If it still
+  // hasn't gone through when Location returns, the restarted heartbeat keeps
+  // resending the same frozen location-off reading.
+  useEffect(() => {
+    if (!employee || deviceStatus !== 'approved' || locationEnabled) return;
+    const offAt = new Date().toISOString();
+    const last = locationRef.current;
+    const frozen = {};
+    Object.entries(sessionsRef.current).forEach(([eventId, s]) => {
+      if (!s?.id || s.time_out) return;
+      const existing = pendingExitRef.current[eventId];
+      if (existing && existing.attendanceId === s.id) {
+        // Already left the geofence earlier -- keep that earlier exit time.
+        existing.locationOff = true;
+        return;
+      }
+      pendingExitRef.current[eventId] = {
+        attendanceId: s.id,
+        observedAt: offAt,
+        latitude: last?.latitude,
+        longitude: last?.longitude,
+        accuracy: last?.accuracy,
+        mocked: mockedRef.current,
+        locationOff: true
+      };
+      frozen[eventId] = offAt;
+    });
+    if (Object.keys(frozen).length) {
+      setSessions((prev) => {
+        const next = { ...prev };
+        Object.entries(frozen).forEach(([eventId, at]) => {
+          next[eventId] = { ...(next[eventId] || {}), pendingExitAt: at };
+        });
+        return next;
+      });
+    }
+
+    let stopped = false;
+    const flush = async () => {
+      let anyEnded = false;
+      for (const [eventId, pending] of Object.entries(pendingExitRef.current)) {
+        if (stopped || !pending.locationOff) continue;
+        try {
+          const result = await sendHeartbeat(pending.attendanceId, pending.latitude, pending.longitude, pending.observedAt, {
+            accuracy: pending.accuracy,
+            mocked: pending.mocked,
+            locationOff: true
+          });
+          if (result?.data?.ended) {
+            delete pendingExitRef.current[eventId];
+            anyEnded = true;
+          }
+        } catch (e) {
+          // No connectivity -- retried on the next tick (or by the heartbeat
+          // once Location is back on), still with the original off time.
+        }
+      }
+      if (anyEnded && !stopped) {
+        await refreshSessionsFromHistoryRef.current?.();
+        notify('Time-Out Recorded', 'Your Location was turned off, so your session was timed out. Turn Location back on to continue your attendance.');
+      }
+    };
+    flush();
+    const retry = setInterval(flush, HEARTBEAT_INTERVAL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(retry);
+    };
+  }, [locationEnabled, employee, deviceStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-evaluate presence whenever the geofence list itself changes (e.g. a
   // new event just went active), using the last known location.

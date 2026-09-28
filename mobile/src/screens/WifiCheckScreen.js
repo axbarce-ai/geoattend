@@ -43,10 +43,14 @@ export default function WifiCheckScreen() {
         setPhase('mismatch');
       }
     } catch (e) {
+      const status = e.response?.status;
       setErrorMsg(
-        e.response
-          ? (e.response.data?.message || 'Could not verify your network.')
-          : 'Could not reach the server. Check that you are connected to the internet.'
+        !e.response
+          ? 'Could not reach the server. Check that you are connected to the internet.'
+          : e.response.data?.message
+            || (status >= 500
+              ? `The server is unavailable right now (error ${status}). Try again in a few minutes.`
+              : `Could not verify your network (error ${status}).`)
       );
       setPhase('error');
     }

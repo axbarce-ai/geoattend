@@ -7,7 +7,7 @@ import FaceDetection from '@react-native-ml-kit/face-detection';
 import { useAuth } from '../context/AuthContext';
 import { colors, radius, shadow } from '../theme';
 import { getDeviceInfo } from '../utils/device';
-import { getDepartments } from '../api/client';
+import { getDepartments, getEmployeeOptions } from '../api/client';
 import FadeIn from '../components/FadeIn';
 import PrimaryButton from '../components/PrimaryButton';
 
@@ -15,19 +15,18 @@ import PrimaryButton from '../components/PrimaryButton';
 // '' (displayed as "None") is the default -- the field is optional.
 const SUFFIX_OPTIONS = ['None', 'Jr.', 'Sr.', 'II', 'III', 'IV', 'V'];
 
-// Mirrors the backend's KNOWN_CLASSIFICATIONS list (controllers/employeeAuthController.js) --
-// keep the two in sync. Rendered with 'Others' appended (see DropdownFieldWithOthers
-// below), which lets the employee type any classification not on this list; the
+// The Classification and Position lists are managed by the admin from the
+// dashboard's employee form and loaded from /employee-auth/employee-options
+// when this screen opens. These two are only the fallback for when that
+// request fails, and match the server's defaults (employeeOptionController.js).
+// Both are rendered with 'Others' appended (see DropdownFieldWithOthers
+// below), which lets the employee type any value not on the list; the
 // backend stores it as free text rather than enforcing this exact set.
 const CLASSIFICATION_OPTIONS = [
   'Permanent Administrative', 'Permanent Academic', 'Casual Administrative',
   'COS Administrative', 'COS Academic', 'Job Order'
 ];
 
-// A reasonably broad starting list of CSPC position titles, split roughly
-// into academic and administrative -- like Classification, 'Others' is
-// appended when rendered so this never blocks someone whose actual title
-// isn't listed.
 const POSITION_OPTIONS = [
   'Instructor I', 'Instructor II', 'Instructor III',
   'Assistant Professor', 'Associate Professor', 'Professor',
@@ -35,7 +34,6 @@ const POSITION_OPTIONS = [
   'Registrar Staff', 'Accounting Staff',
   'Administrative Aide I', 'Administrative Aide II', 'Administrative Aide III',
   'Administrative Officer', 'Administrative Assistant',
-  'Security Guard', 'Utility Worker'
 ];
 
 const GENDER_OPTIONS = ['Male', 'Female'];
@@ -218,6 +216,8 @@ export default function RegistrationScreen({ navigation }) {
   const [classification, setClassification] = useState('');
   const [classificationOther, setClassificationOther] = useState('');
   const [classificationPickerOpen, setClassificationPickerOpen] = useState(false);
+  const [positionOptions, setPositionOptions] = useState(POSITION_OPTIONS);
+  const [classificationOptions, setClassificationOptions] = useState(CLASSIFICATION_OPTIONS);
   const [deviceInfo, setDeviceInfo] = useState('Detecting device...');
 
   // -- Step 2: guided, real-time-verified face capture --
@@ -285,6 +285,28 @@ export default function RegistrationScreen({ navigation }) {
       } catch (err) {
         // Non-fatal — the employee can still type/select once the list loads,
         // or retry; department is resolved/created server-side either way.
+      }
+    })();
+    (async () => {
+      try {
+        const res = await getEmployeeOptions();
+        const positions = Array.isArray(res.data?.positions) ? res.data.positions : POSITION_OPTIONS;
+        const classifications = Array.isArray(res.data?.classifications) ? res.data.classifications : CLASSIFICATION_OPTIONS;
+        if (!mountedRef.current) return;
+        setPositionOptions(positions);
+        setClassificationOptions(classifications);
+        // A returning employee's values were matched against the fallback
+        // lists above; match them again against the admin's current lists.
+        if (existing) {
+          const pos = resolveDropdownValue(existing.position || '', positions);
+          setPosition(pos.selected);
+          setPositionOther(pos.other);
+          const cls = resolveDropdownValue(existing.classification || '', classifications);
+          setClassification(cls.selected);
+          setClassificationOther(cls.other);
+        }
+      } catch (err) {
+        // Non-fatal — the built-in fallback lists stay in place.
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -865,7 +887,7 @@ export default function RegistrationScreen({ navigation }) {
         <DropdownFieldWithOthers
           label="Position"
           required
-          options={POSITION_OPTIONS}
+          options={positionOptions}
           value={position}
           onSelect={setPosition}
           otherValue={positionOther}
@@ -893,7 +915,7 @@ export default function RegistrationScreen({ navigation }) {
         <DropdownFieldWithOthers
           label="Classification"
           required
-          options={CLASSIFICATION_OPTIONS}
+          options={classificationOptions}
           value={classification}
           onSelect={setClassification}
           otherValue={classificationOther}

@@ -218,6 +218,12 @@ app.use(
   require('./routes/departmentRoutes')
 );
 
+// Admin-added positions / classifications for the employee form
+app.use(
+  '/api/employee-options',
+  require('./routes/employeeOptionRoutes')
+);
+
 // Attendance
 app.use(
   '/api/attendance',

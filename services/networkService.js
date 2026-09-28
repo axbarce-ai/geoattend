@@ -42,6 +42,56 @@ function getClientIp(req) {
   return '';
 }
 
+// Loopback and private-LAN ranges. A request from one of these never crossed
+// the internet -- it's the admin on localhost, or a phone hitting the dev
+// server over the same Wi-Fi -- so the client shares the server's own public
+// IP, which is what the allow-list needs.
+const LOCAL_RANGES = new net.BlockList();
+LOCAL_RANGES.addSubnet('127.0.0.0', 8, 'ipv4');
+LOCAL_RANGES.addSubnet('10.0.0.0', 8, 'ipv4');
+LOCAL_RANGES.addSubnet('172.16.0.0', 12, 'ipv4');
+LOCAL_RANGES.addSubnet('192.168.0.0', 16, 'ipv4');
+LOCAL_RANGES.addSubnet('169.254.0.0', 16, 'ipv4');
+LOCAL_RANGES.addAddress('::1', 'ipv6');
+LOCAL_RANGES.addSubnet('fc00::', 7, 'ipv6');
+LOCAL_RANGES.addSubnet('fe80::', 10, 'ipv6');
+
+function isLocalIp(ip) {
+  const family = net.isIP(ip);
+  return !!family && LOCAL_RANGES.check(ip, family === 4 ? 'ipv4' : 'ipv6');
+}
+
+const PUBLIC_IP_SOURCES = ['https://api.ipify.org', 'https://icanhazip.com'];
+const PUBLIC_IP_TTL_MS = 5 * 60 * 1000;
+let publicIpCache = { ip: '', at: 0 };
+
+// The server's own public IP, looked up from an echo service and cached for
+// a few minutes. Returns '' if every source is unreachable.
+async function getServerPublicIp() {
+  if (publicIpCache.ip && Date.now() - publicIpCache.at < PUBLIC_IP_TTL_MS) return publicIpCache.ip;
+  for (const url of PUBLIC_IP_SOURCES) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) continue;
+      const ip = normalizeIp(await res.text());
+      if (net.isIP(ip)) {
+        publicIpCache = { ip, at: Date.now() };
+        return ip;
+      }
+    } catch (_) { /* try the next source */ }
+  }
+  return '';
+}
+
+// Like getClientIp, but a localhost / LAN address is swapped for the public
+// IP the office connection actually uses, so local testing behaves the same
+// as a deployed server.
+async function resolveClientIp(req) {
+  const ip = getClientIp(req);
+  if (!isLocalIp(ip)) return ip;
+  return (await getServerPublicIp()) || ip;
+}
+
 function splitEntries(raw) {
   return String(raw || '')
     .split(/[\s,]+/)
@@ -96,4 +146,4 @@ async function saveAllowedEntries(entries) {
   );
 }
 
-module.exports = { getClientIp, splitEntries, validateEntry, isAllowed, getAllowedEntries, saveAllowedEntries };
+module.exports = { getClientIp, resolveClientIp, splitEntries, validateEntry, isAllowed, getAllowedEntries, saveAllowedEntries };

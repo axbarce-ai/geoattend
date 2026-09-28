@@ -65,9 +65,9 @@ async function sendAdminOtp(req, res, next) {
     const result = await sendMail({
       to: email,
       subject: `${code} is your GeoAttend admin verification code`,
-      text: `${greeting}\n\n${inviter} is creating a GeoAttend CSPC admin account for this email address.\n\nYour verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.\n\nIf you weren't expecting this, you can ignore this email.`,
+      text: `${greeting}\n\n${inviter} is creating a GeoAttend admin account for this email address.\n\nYour verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.\n\nIf you weren't expecting this, you can ignore this email.`,
       html: `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;color:#1B2559">
-        <h2 style="color:#0D00A5;margin-bottom:4px">GeoAttend CSPC</h2>
+        <h2 style="color:#0D00A5;margin-bottom:4px">GeoAttend</h2>
         <p>${escapeHtml(greeting)}</p>
         <p>${escapeHtml(inviter)} is creating a GeoAttend admin account for this email address. Enter this code to verify it:</p>
         <p style="font-size:32px;font-weight:bold;letter-spacing:8px;background:#F0F2FF;padding:16px;text-align:center;border-radius:12px">${code}</p>

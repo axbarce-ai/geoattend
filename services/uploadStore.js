@@ -126,6 +126,15 @@ async function serveStoredUpload(req, res, next) {
   }
 }
 
+// Deletes a photo for good: its stored copy and the file on this machine's
+// disk. With the stored copy gone, no server's sync can write it back.
+async function removeUpload(publicPath) {
+  if (!publicPath || !publicPath.startsWith('/uploads/') || publicPath.includes('..')) return;
+  await ensureTable();
+  await pool.query('DELETE FROM stored_uploads WHERE path = ?', [publicPath]);
+  await fs.promises.unlink(diskPathFor(publicPath)).catch(() => {});
+}
+
 function diskPathFor(publicPath) {
   return path.join(UPLOADS_DIR, ...publicPath.slice('/uploads/'.length).split('/'));
 }
@@ -233,4 +242,4 @@ function startDiskSync(intervalMs = Number(process.env.UPLOAD_SYNC_INTERVAL_MS) 
   return setInterval(() => tick(false), intervalMs);
 }
 
-module.exports = { saveUpload, hasUpload, persistRequestUploads, serveStoredUpload, publicPathFor, ensureTable, syncToDisk, startDiskSync };
+module.exports = { saveUpload, hasUpload, removeUpload, persistRequestUploads, serveStoredUpload, publicPathFor, ensureTable, syncToDisk, startDiskSync };

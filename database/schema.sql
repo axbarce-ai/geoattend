@@ -104,7 +104,6 @@ CREATE TABLE mobile_devices (
   model VARCHAR(120) NULL,
   brand VARCHAR(120) NULL,
   os VARCHAR(60) NULL,
-  mac_address VARCHAR(60) NULL,
   status ENUM('pending','approved','rejected','blacklisted') DEFAULT 'pending',
   registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
@@ -170,9 +169,6 @@ CREATE TABLE ocr_records (
   image_path VARCHAR(255) NOT NULL,
   extracted_text TEXT NULL,
   extracted_employee_code VARCHAR(20) NULL,
-  extracted_name VARCHAR(150) NULL,
-  extracted_position VARCHAR(150) NULL,
-  confidence DECIMAL(5,2) NULL,
   result ENUM('matched','no_match','wrong_employee','wrong_id','unreadable','duplicate','expired','low_confidence') NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE SET NULL
@@ -259,7 +255,6 @@ CREATE TABLE attendance (
   late_minutes INT DEFAULT 0,
   work_hours DECIMAL(5,2) DEFAULT 0,
   total_duration_seconds INT NOT NULL DEFAULT 0, -- accumulated across every time-in/time-out session for the day
-  rejection_reason VARCHAR(255) NULL,
   last_lat DECIMAL(10,7) NULL,
   last_lng DECIMAL(10,7) NULL,
   last_ping_at DATETIME NULL,
@@ -377,27 +372,10 @@ CREATE TABLE certificates (
   certificate_number VARCHAR(60) NOT NULL UNIQUE,
   event_title VARCHAR(200) NOT NULL,
   issued_date DATE NOT NULL,
-  qr_code_path VARCHAR(255) NULL,
   pdf_path VARCHAR(255) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
   FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL
-) ENGINE=InnoDB;
-
--- ------------------------------------------------------------
--- RATINGS (monthly leaderboard snapshot)
--- ------------------------------------------------------------
-CREATE TABLE ratings (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  employee_id INT NOT NULL,
-  period_month TINYINT NOT NULL,
-  period_year SMALLINT NOT NULL,
-  attendance_score DECIMAL(5,2) NOT NULL,
-  rank_overall INT NULL,
-  rank_department INT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
-  UNIQUE KEY uniq_emp_period (employee_id, period_month, period_year)
 ) ENGINE=InnoDB;
 
 -- ------------------------------------------------------------
@@ -488,9 +466,10 @@ CREATE TABLE stored_uploads (
 -- ------------------------------------------------------------
 -- Indexes for common lookups
 -- ------------------------------------------------------------
+-- attendance(employee_id) is covered by uniq_emp_date_event, and
+-- attendance_sessions(attendance_id) by idx_attendance_sessions_open, so
+-- neither gets a separate single-column index.
 CREATE INDEX idx_attendance_date ON attendance(attendance_date);
-CREATE INDEX idx_attendance_emp ON attendance(employee_id);
-CREATE INDEX idx_attendance_sessions_attendance ON attendance_sessions(attendance_id);
 CREATE INDEX idx_attendance_sessions_open ON attendance_sessions(attendance_id, time_out);
 CREATE INDEX idx_employees_dept ON employees(department_id);
 CREATE INDEX idx_geofence_event ON geofences(event_id);
