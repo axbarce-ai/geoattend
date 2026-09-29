@@ -21,7 +21,7 @@ export default function BottomNav({ active, navigation }) {
           <TouchableOpacity
             key={item.key}
             style={styles.navItem}
-            onPress={() => navigation.navigate(item.key)}
+            onPress={() => navigation.navigate(item.key, undefined, { pop: true })}
             activeOpacity={0.7}
             accessibilityRole="tab"
             accessibilityState={{ selected: isActive }}

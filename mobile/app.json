@@ -5,13 +5,8 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "scheme": "geoattendpro",
+    "scheme": ["geoattendpro", "com.geoattend.pro"],
     "icon": "./assets/icon.png",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#FFFFFF"
-    },
     "android": {
       "package": "com.geoattend.pro",
       "adaptiveIcon": {
@@ -53,10 +48,20 @@
           "cameraPermission": "GeoAttend needs camera access to capture your face for Face Verification registration.",
           "microphonePermission": "GeoAttend records a short guided video (blink, nod, turn your head) during face registration to confirm you're a live person."
         }
-      ]
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#FFFFFF"
+        }
+      ],
+      "expo-font"
     ],
     "extra": {
-      "apiBaseUrl": "https://geoattend-pro-njgh.onrender.com/api",
+      "apiBaseUrl": "https://pq2qwb2x-3000.asse.devtunnels.ms/api",
       "googleWebClientId": "89052635165-n8l49e8ccn17fu054ll0fgcreinlv61c.apps.googleusercontent.com",
       "googleIosClientId": "",
       "googleAndroidClientId": "89052635165-kd3akbf6bdjr8m1f90gbft5g4a6cmi72.apps.googleusercontent.com",

@@ -1,15 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image, ScrollView, Animated } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image, ScrollView, Animated, Platform } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { Ionicons } from '@expo/vector-icons';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { makeRedirectUri } from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import { useAuth } from '../context/AuthContext';
 import { colors, radius, shadow, CSPC_LOGO } from '../theme';
-import { API_BASE_URL, GOOGLE_WEB_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, GOOGLE_ANDROID_CLIENT_ID, isGoogleConfigured } from '../config';
+import { API_BASE_URL, ASSET_BASE_URL, GOOGLE_WEB_CLIENT_ID, GOOGLE_IOS_CLIENT_ID, GOOGLE_ANDROID_CLIENT_ID, isGoogleConfigured } from '../config';
 import { notify } from '../utils/notify';
 import FadeIn from '../components/FadeIn';
 
 WebBrowser.maybeCompleteAuthSession();
+
+// Google rejects the native OAuth redirect in Expo Go (its bundle/package isn't
+// ours) and on a platform with no client ID of its own -- iOS showed "Access
+// blocked: Authorization Error ... invalid_request". Those sign in through the
+// server's /mobile/google-signin page instead, which hands the ID token back
+// through the app's redirect URL.
+const IS_EXPO_GO = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const NATIVE_CLIENT_ID = Platform.OS === 'ios' ? GOOGLE_IOS_CLIENT_ID : Platform.OS === 'android' ? GOOGLE_ANDROID_CLIENT_ID : GOOGLE_WEB_CLIENT_ID;
+const USE_WEB_BRIDGE = IS_EXPO_GO || !NATIVE_CLIENT_ID;
 
 // Mirrors the #screen-login → #screen-choice flow from the CSPC GeoAttend web
 // prototype, but using real Google Sign-In (expo-auth-session) instead of the
@@ -83,7 +94,32 @@ export default function LoginScreen({ navigation }) {
       return;
     }
     setErrorMsg('');
-    promptAsync();
+    if (USE_WEB_BRIDGE) signInViaWebBridge();
+    else promptAsync();
+  };
+
+  const signInViaWebBridge = async () => {
+    setAuthenticating(true);
+    try {
+      const redirectUri = makeRedirectUri({ path: 'google-auth' });
+      const url = `${ASSET_BASE_URL}/mobile/google-signin?return=${encodeURIComponent(redirectUri)}`;
+      const result = await WebBrowser.openAuthSessionAsync(url, redirectUri);
+      if (result.type !== 'success') {
+        setAuthenticating(false);
+        if (result.type !== 'cancel' && result.type !== 'dismiss') setErrorMsg('Google sign-in was cancelled or failed.');
+        return;
+      }
+      const match = /[#&?]id_token=([^&#]+)/.exec(result.url || '');
+      if (!match) {
+        setAuthenticating(false);
+        setErrorMsg('Could not retrieve a Google identity token. Please try again.');
+        return;
+      }
+      await handleGoogleToken(decodeURIComponent(match[1]));
+    } catch (e) {
+      setAuthenticating(false);
+      setErrorMsg(`Could not open Google sign-in at ${ASSET_BASE_URL}. Check your internet connection and try again.`);
+    }
   };
 
   const btnPressIn = () => Animated.spring(btnScale, { toValue: 0.97, useNativeDriver: true, speed: 40, bounciness: 0 }).start();
@@ -123,7 +159,7 @@ export default function LoginScreen({ navigation }) {
                 onPress={handlePress}
                 onPressIn={btnPressIn}
                 onPressOut={btnPressOut}
-                disabled={!request || authenticating}
+                disabled={(!USE_WEB_BRIDGE && !request) || authenticating}
                 activeOpacity={0.85}
               >
                 {authenticating ? (

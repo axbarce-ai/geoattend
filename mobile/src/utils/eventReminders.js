@@ -1,4 +1,4 @@
-import * as Notifications from 'expo-notifications';
+import Notifications from './notificationsModule';
 import { Platform } from 'react-native';
 
 // How long before an event's start time to fire the local reminder.
@@ -7,9 +7,10 @@ const REMINDER_LEAD_MINUTES = 15;
 // Makes reminders actually pop up (banner + sound) while the app is open,
 // not just when it's backgrounded — Expo's default handler suppresses
 // foreground alerts otherwise.
-Notifications.setNotificationHandler({
+Notifications?.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),
@@ -19,7 +20,10 @@ let permissionRequested = false;
 
 // Asks for notification permission once per app session. Safe to call
 // repeatedly — after the first successful/denied request it just no-ops.
+// Always false where notifications aren't available (Android Expo Go), so
+// every caller skips posting one.
 export async function ensureNotificationPermission() {
+  if (!Notifications) return false;
   if (permissionRequested) return true;
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
   let finalStatus = existingStatus;
@@ -95,7 +99,7 @@ export async function scheduleTodayEventReminders(todaySchedule) {
         body: `"${g.title}" starts at ${new Date(g.start_datetime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — ${g.venue || 'venue TBA'}.`,
         sound: true,
       },
-      trigger: { date: new Date(triggerMs) },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(triggerMs) },
     });
   }
 }

@@ -369,6 +369,29 @@ app.get('/mobile', (req, res) => {
   });
 });
 
+// Google Sign-In bridge for the mobile app (views/google-bridge.ejs): used
+// where Google rejects the app's own OAuth redirect -- Expo Go, or iOS
+// without an iOS client ID ("Access blocked ... invalid_request"). The page
+// hands the ID token to `return`, so only the app's own URL schemes are
+// accepted there; an https:// return URL could otherwise send a sign-in
+// token to any site.
+const GOOGLE_BRIDGE_RETURN_SCHEMES = ['exp:', 'exps:', 'geoattendpro:', 'exp+geoattend-pro-mobile:'];
+
+app.get('/mobile/google-signin', (req, res) => {
+  let returnUrl = null;
+  try {
+    const parsed = new URL(String(req.query.return || ''));
+    if (GOOGLE_BRIDGE_RETURN_SCHEMES.includes(parsed.protocol)) returnUrl = parsed.href.split('#')[0];
+  } catch (e) {
+    // falls through to the 400 below
+  }
+  if (!returnUrl) return res.status(400).send('Invalid return URL.');
+  res.render('google-bridge', {
+    googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+    returnUrl
+  });
+});
+
 // ------------------------------------------------------------
 // Error Handling
 // ------------------------------------------------------------

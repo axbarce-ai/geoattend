@@ -1,4 +1,4 @@
-import * as Notifications from 'expo-notifications';
+import Notifications from './notificationsModule';
 import { Platform, Vibration } from 'react-native';
 import { ensureNotificationPermission } from './eventReminders';
 
@@ -62,5 +62,6 @@ export async function alertFaceVerificationRequired(attendanceId, eventTitle) {
 // Stops repeat alerts for a record once it's been verified.
 export function clearFaceVerificationAlert(attendanceId) {
   delete lastAlertAt[attendanceId];
+  if (!Notifications) return;
   Notifications.dismissNotificationAsync(`face-verification-${attendanceId}`).catch(() => {});
 }

@@ -1,4 +1,4 @@
-import * as Notifications from 'expo-notifications';
+import Notifications from './notificationsModule';
 import { Platform } from 'react-native';
 import { ensureNotificationPermission } from './eventReminders';
 

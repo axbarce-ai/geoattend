@@ -91,7 +91,7 @@ export default function DashboardScreen({ navigation }) {
                 </Text>
               </View>
             </View>
-            <TouchableOpacity style={styles.avatarBtn} onPress={() => navigation.navigate('Profile')} activeOpacity={0.75}>
+            <TouchableOpacity style={styles.avatarBtn} onPress={() => navigation.navigate('Profile', undefined, { pop: true })} activeOpacity={0.75}>
               <Ionicons name="person-outline" size={20} color={colors.primary} />
             </TouchableOpacity>
           </View>
@@ -118,7 +118,7 @@ export default function DashboardScreen({ navigation }) {
               style={[styles.btnPrimaryOnCard, !activeEvent && styles.btnDisabled]}
               disabled={!activeEvent}
               activeOpacity={0.85}
-              onPress={() => navigation.navigate('Attendance', activeEvent ? { geofenceId: activeEvent.id } : undefined)}
+              onPress={() => navigation.navigate('Attendance', activeEvent ? { geofenceId: activeEvent.id } : undefined, { pop: true })}
             >
               {activeEvent && <Ionicons name="finger-print-outline" size={18} color={colors.primary} />}
               <Text style={styles.btnPrimaryOnCardText}>{activeEvent ? 'Mark Attendance' : 'No Active Event'}</Text>
@@ -137,7 +137,7 @@ export default function DashboardScreen({ navigation }) {
                 <TouchableOpacity
                   key={g.id}
                   style={[styles.eventItem, i === todaySchedule.length - 1 && styles.eventItemLast]}
-                  onPress={() => navigation.navigate('Attendance', { geofenceId: g.id })}
+                  onPress={() => navigation.navigate('Attendance', { geofenceId: g.id }, { pop: true })}
                   activeOpacity={0.6}
                 >
                   <View style={styles.eventIconWrap}>

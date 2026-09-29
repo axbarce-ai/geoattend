@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in · GeoAttend</title>
+    <link rel="icon" type="image/png" href="/img/favicon.png">
+    <style>
+        :root { --navy: #13237A; --muted: #6B7280; --danger: #B42318; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: #F4F7FE; color: #1B2559; }
+        .card { width: 100%; max-width: 380px; background: #fff; border-radius: 20px; padding: 32px 24px; text-align: center;
+            box-shadow: 0 12px 32px rgba(19, 35, 122, 0.12); }
+        .card img { width: 72px; height: 72px; }
+        h1 { font-size: 1.25rem; margin: 14px 0 6px; color: var(--navy); }
+        p { font-size: 0.9rem; color: var(--muted); line-height: 1.5; }
+        #gsi-button { display: flex; justify-content: center; margin-top: 22px; min-height: 44px; }
+        #status { margin-top: 16px; font-size: 0.85rem; }
+        #status.error { color: var(--danger); }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <img src="/img/cspc-logo.png" alt="CSPC">
+        <h1>Sign in to GeoAttend</h1>
+        <p>Use your official CSPC Google account. You'll be sent back to the app afterwards.</p>
+        <div id="gsi-button"></div>
+        <p id="status"></p>
+    </main>
+
+    <script>
+        // Google Sign-In for the mobile app when it can't use Google's native
+        // flow (Expo Go, or a platform without its own OAuth client ID): this
+        // page signs in on the server's own HTTPS origin, then hands the ID
+        // token back to the app through its return URL. The server only
+        // renders it with an app-scheme return URL (see server.js).
+        var CLIENT_ID = <%- JSON.stringify(googleClientId).replace(/</g, '\\u003c') %>;
+        var RETURN_URL = <%- JSON.stringify(returnUrl).replace(/</g, '\\u003c') %>;
+        var statusEl = document.getElementById('status');
+
+        function fail(msg) {
+            statusEl.textContent = msg;
+            statusEl.className = 'error';
+        }
+
+        function onCredential(resp) {
+            if (!resp || !resp.credential) return fail('Google did not return a sign-in token. Please try again.');
+            statusEl.className = '';
+            statusEl.textContent = 'Signed in. Returning to the app…';
+            location.replace(RETURN_URL + '#id_token=' + encodeURIComponent(resp.credential));
+        }
+
+        window.onload = function () {
+            if (!CLIENT_ID) return fail('Google Sign-In is not configured on this server.');
+            if (!window.google || !google.accounts || !google.accounts.id) return fail('Could not load Google Sign-In. Check your connection and try again.');
+            google.accounts.id.initialize({ client_id: CLIENT_ID, callback: onCredential, ux_mode: 'popup', auto_select: false });
+            google.accounts.id.renderButton(document.getElementById('gsi-button'),
+                { type: 'standard', theme: 'outline', size: 'large', text: 'signin_with', shape: 'pill', width: 280 });
+        };
+    </script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+</body>
+</html>
