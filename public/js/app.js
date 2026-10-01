@@ -1341,7 +1341,7 @@ const G_App = {
             container.innerHTML = `
                 <div class="card" style="background: #FEF2F2; border-color: #FECACA;">
                     <h3 style="color: var(--danger); font-weight: 800; display:flex; align-items:center; gap:10px; margin-bottom: 6px;">
-                        <i data-lucide="alert-triangle"></i> ${alerts.length} Anomaly Alert${alerts.length > 1 ? 's' : ''} — Possible Spoofing/Hacking Detected
+                        <i data-lucide="alert-triangle"></i> ${alerts.length} Anomaly Alert${alerts.length > 1 ? 's' : ''}
                     </h3>
                     <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 15px;">Each employee is automatically prompted for Face Verification on their own device — this list clears itself the moment they pass it.</p>
                     <div style="display:flex; flex-direction:column; gap:10px;">
