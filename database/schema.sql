@@ -13,7 +13,7 @@ CREATE TABLE admin_accounts (
   id INT AUTO_INCREMENT PRIMARY KEY,
   full_name VARCHAR(150) NOT NULL,
   email VARCHAR(150) NOT NULL UNIQUE,
-  password_hash VARCHAR(255) NOT NULL,
+  password_hash VARCHAR(255) NULL,  -- unused: admins sign in with Google only
   role ENUM('super_admin','admin','staff') DEFAULT 'admin',
   is_active TINYINT(1) DEFAULT 1,
   last_login DATETIME NULL,

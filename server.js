@@ -350,10 +350,7 @@ app.get(DASHBOARD_PATHS, (req, res) => {
     googleMapsApiKey:
       process.env.GOOGLE_MAPS_API_KEY || '',
 
-    // Pre-fills the admin login field (admin@my.cspc.edu.ph by default)
-    defaultAdminEmail: config.email.defaultAdmin,
-
-    // "Sign in with Google" on the admin login (hidden when unset)
+    // "Sign in with Google" -- the only admin login (needs GOOGLE_CLIENT_ID)
     googleClientId: process.env.GOOGLE_CLIENT_ID || ''
   });
 });

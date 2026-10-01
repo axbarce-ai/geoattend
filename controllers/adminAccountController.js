@@ -109,18 +109,16 @@ async function verifyAdminOtp(email, otp) {
   return null;
 }
 
-// POST /api/admin-accounts — { full_name, email, password, role, otp }
+// POST /api/admin-accounts — { full_name, email, role, otp }
 // role: 'super_admin' (full access) or 'admin' (Verification module only — OCR & Face)
 // otp: the code emailed by sendAdminOtp.
+// No password: admins sign in with Google only (authController.googleLogin).
 async function createAdminAccount(req, res, next) {
   try {
-    const { full_name, password, role, otp } = req.body;
+    const { full_name, role, otp } = req.body;
     const email = normalizeEmail(req.body.email);
-    if (!full_name || !email || !password) {
-      return res.status(400).json({ success: false, message: 'Full name, email, and password are required.' });
-    }
-    if (password.length < 6) {
-      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+    if (!full_name || !email) {
+      return res.status(400).json({ success: false, message: 'Full name and email are required.' });
     }
     if (!['super_admin', 'admin'].includes(role)) {
       return res.status(400).json({ success: false, message: 'Role must be super_admin or admin.' });
@@ -132,10 +130,9 @@ async function createAdminAccount(req, res, next) {
     const otpError = await verifyAdminOtp(email, otp);
     if (otpError) return res.status(400).json({ success: false, code: 'OTP_INVALID', message: otpError });
 
-    const hash = await bcrypt.hash(password, 12);
     const [result] = await pool.query(
-      `INSERT INTO admin_accounts (full_name, email, password_hash, role) VALUES (?, ?, ?, ?)`,
-      [full_name, email, hash, role]
+      `INSERT INTO admin_accounts (full_name, email, role) VALUES (?, ?, ?)`,
+      [full_name, email, role]
     );
 
     await logAction({ adminId: req.admin.id, action: 'create', module: 'admin_accounts', details: { email, role }, ip: req.ip });

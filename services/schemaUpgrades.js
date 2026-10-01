@@ -59,6 +59,16 @@ async function addAdminEmailOtps() {
   );
 }
 
+// Admins sign in with Google only, so new admin accounts have no password.
+async function makeAdminPasswordOptional() {
+  const [rows] = await pool.query(
+    `SELECT IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_accounts' AND COLUMN_NAME = 'password_hash'`
+  );
+  if (!rows[0] || rows[0].IS_NULLABLE === 'YES') return;
+  await pool.query('ALTER TABLE admin_accounts MODIFY password_hash VARCHAR(255) NULL');
+  console.log('[schema] Made admin_accounts.password_hash optional.');
+}
+
 // Alerts shown in the admin dashboard's notification bell (see
 // services/adminNotificationService.js).
 async function addAdminNotifications() {
@@ -121,6 +131,7 @@ async function run() {
   await addEmployeeApproval();
   await addFaceRecordSource();
   await addAdminEmailOtps();
+  await makeAdminPasswordOptional();
   await addAdminNotifications();
   await dropUnusedSchema();
 }

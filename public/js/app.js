@@ -105,30 +105,6 @@ const G_App = {
     },
 
     auth: {
-        login: async () => {
-            const email = document.getElementById('login-email').value.trim();
-            const password = document.getElementById('login-password').value;
-            const errorEl = document.getElementById('login-error');
-            const btn = document.getElementById('login-btn');
-            errorEl.innerText = '';
-
-            if (!email || !password) {
-                errorEl.innerText = 'Please enter both email and password.';
-                return;
-            }
-
-            btn.innerText = 'Verifying...';
-            try {
-                const data = await apiFetch('/auth/login', {
-                    method: 'POST',
-                    body: JSON.stringify({ email, password })
-                });
-                G_App.auth.enterDashboard(data);
-            } catch (err) {
-                errorEl.innerText = err.message;
-                btn.innerText = 'Sign In';
-            }
-        },
         // Stores the session and swaps the login screen for the dashboard.
         enterDashboard: (data) => {
             localStorage.setItem('ga_token', data.token);
@@ -142,7 +118,7 @@ const G_App = {
                 try { await G_App.init(); } finally { G_App.splash.hide(); }
             }, 300);
         },
-        // SSO: renders Google's own "Sign in with Google" button on the login screen.
+        // Renders Google's own "Sign in with Google" button -- the only way to sign in.
         initGoogleSignIn: () => {
             const slot = document.getElementById('google-signin-btn');
             if (!slot || !window.__GOOGLE_CLIENT_ID__) return;
@@ -3465,7 +3441,7 @@ const G_App = {
         otpEmail: null,     // address the current code was sent to
         resendTimer: null,
         openModal: () => {
-            ['aa-name', 'aa-email', 'aa-password', 'aa-otp'].forEach(id => document.getElementById(id).value = '');
+            ['aa-name', 'aa-email', 'aa-otp'].forEach(id => document.getElementById(id).value = '');
             document.getElementById('aa-role').value = 'admin';
             G_App.adminAccounts.resetOtp();
             document.getElementById('admin-account-modal').classList.add('open');
@@ -3535,12 +3511,11 @@ const G_App = {
             const payload = {
                 full_name: document.getElementById('aa-name').value.trim(),
                 email: document.getElementById('aa-email').value.trim().toLowerCase(),
-                password: document.getElementById('aa-password').value,
                 role: document.getElementById('aa-role').value,
                 otp: document.getElementById('aa-otp').value.trim()
             };
-            if (!payload.full_name || !payload.email || !payload.password) {
-                return toast('Full name, email, and password are required.', 'error');
+            if (!payload.full_name || !payload.email) {
+                return toast('Full name and email are required.', 'error');
             }
             if (!aa.otpEmail) return toast('Verify the email first: click "Send Code".', 'error');
             if (!/^\d{6}$/.test(payload.otp)) return toast('Enter the 6-digit code sent to the email.', 'error');

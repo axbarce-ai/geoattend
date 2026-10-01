@@ -1158,13 +1158,11 @@
             <h1 style="font-size: 1.8rem; font-weight: 800;">GeoAttend</h1>
             <p style="margin-bottom: 30px; opacity: 0.7;">CSPC Admin Portal</p>
             <div class="login-error" id="login-error"></div>
-            <input type="email" id="login-email" class="login-input" placeholder="Admin Email" value="<%= typeof defaultAdminEmail !== 'undefined' ? defaultAdminEmail : 'admin@my.cspc.edu.ph' %>">
-            <input type="password" id="login-password" class="login-input" placeholder="Password" onkeypress="if(event.key==='Enter') G_App.auth.login()">
-            <button class="login-btn" id="login-btn" onclick="G_App.auth.login()">Sign In</button>
             <% if (googleClientId) { %>
-            <div class="login-divider"><span>or</span></div>
             <div id="google-signin-btn" class="google-signin-slot"></div>
             <p class="login-sso-note">Use your institutional Google account. It must already be an admin account.</p>
+            <% } else { %>
+            <p class="login-sso-note">Google Sign-In is not configured on this server. Set GOOGLE_CLIENT_ID in .env.</p>
             <% } %>
         </div>
     </div>
@@ -2027,8 +2025,6 @@
                         <label style="font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px; display: block;">Verification Code</label>
                         <input type="text" id="aa-otp" class="geo-input aa-otp-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" oninput="this.value = this.value.replace(/\D/g, '')">
                     </div>
-                    <label style="font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px; display: block;">Password</label>
-                    <input type="password" id="aa-password" class="geo-input" placeholder="At least 6 characters">
                     <label style="font-size: 0.7rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px; display: block;">Role</label>
                     <select id="aa-role" class="geo-input">
                         <option value="admin">Admin — Verification only</option>
