@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Modal, FlatList, Image, Animated, Easing } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
-import * as FileSystem from 'expo-file-system/legacy';
-import FaceDetection from '@react-native-ml-kit/face-detection';
+import { FACE_DETECTION_AVAILABLE, USE_EXPO_GO_FACE_FALLBACK, EXPO_GO_FALLBACK_LIVENESS_ACTIONS } from '../utils/faceDetector';
+import LiveFaceCamera, { useLivenessDetector } from '../components/LiveFaceCamera';
 import { useAuth } from '../context/AuthContext';
 import { colors, radius, shadow } from '../theme';
 import { getDeviceInfo } from '../utils/device';
@@ -110,7 +110,7 @@ function DropdownFieldWithOthers({
 // order, easy to end up pointing the phone somewhere with no face in frame at
 // all and get a confusing "couldn't confirm" error). This single-step version
 // keeps the same underlying protection (a live face must be sustained in
-// frame for CONFIRM_FRAMES consecutive on-device ML Kit reads before anything
+// frame (checked on every camera frame by ML Kit) before anything
 // is captured -- a photo of a photo or an empty frame never passes) while
 // cutting the number of things that can go wrong for the person registering.
 //
@@ -125,15 +125,10 @@ function DropdownFieldWithOthers({
 const HOLD_STILL_CAPTION = 'Hold still and look at the camera';
 
 // -- Real-time detection tuning --
+// Frame-level hold/blink thresholds live in components/LiveFaceCamera.js.
 const DETECTION_TIMEOUT_MS = 12000; // generous window so a slow phone or dim room can still catch up
 const DETECTION_ATTEMPTS = 3; // retries allowed before aborting the whole capture
-const CONFIRM_FRAMES = 3; // consecutive frames with a face present required before trusting it -- filters out single-frame ML Kit noise (e.g. a blink) without requiring any head movement
-
-// -- Blink liveness tuning --
 const BLINK_TIMEOUT_MS = 8000; // generous window for a natural blink after being prompted, before this attempt is abandoned
-const EYES_OPEN_THRESHOLD = 0.6; // ML Kit eyeOpenProbability above this counts as "open"
-const EYES_CLOSED_THRESHOLD = 0.3; // below this counts as "closed" -- the gap between the two thresholds avoids flicker right at the boundary
-const MAX_BLINK_FACE_DROPOUT = 6; // consecutive missed reads before giving up on this attempt (face moved out of frame)
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -223,6 +218,7 @@ export default function RegistrationScreen({ navigation }) {
   // -- Step 2: guided, real-time-verified face capture --
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
+  const liveness = useLivenessDetector();
   const [captureStage, setCaptureStage] = useState('ready'); // 'ready' | 'recording' | 'reviewing'
   // 'idle' | 'scanning' | 'confirmed' | 'failed' | 'finishing' -- drives the
   // real-time feedback UI (pulsing scan ring, success/fail pop, etc).
@@ -381,115 +377,28 @@ export default function RegistrationScreen({ navigation }) {
     }
   }, [stepStatus, resultPop]);
 
-  // Polls the camera + on-device ML Kit face detector until a face is
-  // actually, sustainedly present in frame (or DETECTION_TIMEOUT_MS runs
-  // out). No head movement is required -- a single noisy ML Kit miss (e.g. a
-  // blink) can't reset progress by itself, since only a face present for
-  // CONFIRM_FRAMES consecutive reads counts as "held".
-  const detectFaceHold = async () => {
-    const startedAt = Date.now();
-    let holdStreak = 0; // consecutive frames with a face present
-
-    while (Date.now() - startedAt < DETECTION_TIMEOUT_MS) {
-      if (!verifyingRef.current) return false; // cancelled
-
-      let photo;
-      try {
-        photo = await cameraRef.current.takePictureAsync({ quality: 0.3, skipProcessing: true, base64: false });
-      } catch (err) {
-        await wait(150);
-        continue;
-      }
-
-      let faces = [];
-      try {
-        faces = await FaceDetection.detect(photo.uri, {
-          performanceMode: 'fast',
-          landmarkMode: 'none',
-          contourMode: 'none',
-          minFaceSize: 0.15,
-        });
-      } catch (err) {
-        faces = [];
-      }
-      // Each poll frame is only needed for this one detection pass.
-      if (photo.uri) FileSystem.deleteAsync(photo.uri, { idempotent: true }).catch(() => {});
-
-      const face = faces && faces[0];
-      setLiveFaceDetected(!!face);
-
-      holdStreak = face ? holdStreak + 1 : 0;
-      if (holdStreak >= CONFIRM_FRAMES) return true; // face held steady long enough
-    }
-    return false; // timed out without a sustained face
-  };
+  // Waits until a face looking at the camera has stayed in frame for a
+  // moment (or DETECTION_TIMEOUT_MS runs out). Driven by the camera's
+  // real-time face stream (components/LiveFaceCamera.js), so it reacts
+  // within a frame or two instead of one photo at a time.
+  const detectFaceHold = () => liveness.waitForFaceHold(
+    DETECTION_TIMEOUT_MS,
+    () => !verifyingRef.current,
+    setLiveFaceDetected,
+  );
 
   // Runs once a steady face has already been confirmed by detectFaceHold().
   // Waits for a genuine eyes-open -> eyes-closed -> eyes-open cycle -- i.e. an
-  // actual blink -- using ML Kit's per-eye "open probability" classification
-  // (only populated when classificationMode: 'all' is passed). This is the
-  // step that defeats a photo (or a paused video frame) held up to the
-  // camera: a static image can satisfy "hold a face steady" but its eye-open
-  // probability never moves, so it can never complete the closed -> open
-  // transition this function requires.
-  const detectBlink = async () => {
-    const startedAt = Date.now();
-    let phase = 'awaiting-close'; // 'awaiting-close' -> 'awaiting-reopen' -> done
-    let noFaceStreak = 0;
-
-    while (Date.now() - startedAt < BLINK_TIMEOUT_MS) {
-      if (!verifyingRef.current) return false; // cancelled
-
-      let photo;
-      try {
-        photo = await cameraRef.current.takePictureAsync({ quality: 0.3, skipProcessing: true, base64: false });
-      } catch (err) {
-        await wait(150);
-        continue;
-      }
-
-      let faces = [];
-      try {
-        faces = await FaceDetection.detect(photo.uri, {
-          performanceMode: 'fast',
-          landmarkMode: 'none',
-          contourMode: 'none',
-          classificationMode: 'all', // needed for leftEyeOpenProbability / rightEyeOpenProbability
-          minFaceSize: 0.15,
-        });
-      } catch (err) {
-        faces = [];
-      }
-      if (photo.uri) FileSystem.deleteAsync(photo.uri, { idempotent: true }).catch(() => {});
-
-      const face = faces && faces[0];
-      setLiveFaceDetected(!!face);
-
-      if (!face) {
-        // A brief dropout (motion blur, a mistimed frame) shouldn't fail the
-        // whole attempt by itself -- only give up once the face has been
-        // missing for several consecutive reads.
-        noFaceStreak += 1;
-        if (noFaceStreak >= MAX_BLINK_FACE_DROPOUT) return false;
-        continue;
-      }
-      noFaceStreak = 0;
-
-      // ML Kit reports each eye separately; average them so one eye being
-      // slightly obscured (hair, a tilted head) doesn't block detection.
-      const { leftEyeOpenProbability: left, rightEyeOpenProbability: right } = face;
-      if (left == null || right == null) continue; // classification not available for this particular frame
-      const openness = (left + right) / 2;
-
-      if (phase === 'awaiting-close' && openness < EYES_CLOSED_THRESHOLD) {
-        phase = 'awaiting-reopen';
-        setBlinkEyesClosed(true);
-      } else if (phase === 'awaiting-reopen' && openness > EYES_OPEN_THRESHOLD) {
-        return true; // full open -> closed -> open cycle observed: a real blink
-      }
-    }
-    return false; // timed out without completing a full blink
-  };
+  // actual blink -- from ML Kit's per-eye "open probability" on every frame.
+  // This is the step that defeats a photo (or a paused video frame) held up
+  // to the camera: a static image can satisfy "hold a face steady" but its
+  // eye-open probability never moves, so it can never complete the blink.
+  const detectBlink = () => liveness.waitForBlink(
+    BLINK_TIMEOUT_MS,
+    () => !verifyingRef.current,
+    setLiveFaceDetected,
+    setBlinkEyesClosed,
+  );
 
   // Runs the simplified single-step capture: wait for a live, steadily-held
   // face and a completed blink (retrying on a missed attempt before giving
@@ -499,11 +408,26 @@ export default function RegistrationScreen({ navigation }) {
     setErrorMsg('');
     if (!cameraRef.current) return;
 
+    if (!FACE_DETECTION_AVAILABLE && !USE_EXPO_GO_FACE_FALLBACK) {
+      setErrorMsg('Face scanning is not available in this version of the app. Please install the latest GeoAttend app.');
+      return;
+    }
+
     setCaptureStage('recording');
     verifyingRef.current = true;
 
     let confirmed = false;
     let failedOnBlink = false; // which step the last attempt failed on, so the error message matches
+    if (USE_EXPO_GO_FACE_FALLBACK) {
+      // Expo Go has no ML Kit (see utils/faceDetector.js): give the employee
+      // a moment to center their face, then capture. The server checks the
+      // photo actually contains a face.
+      setStepStatus('scanning');
+      setLiveFaceDetected(true);
+      await wait(2500);
+      if (!verifyingRef.current) return;
+      confirmed = true;
+    }
     for (let attempt = 0; attempt < DETECTION_ATTEMPTS && !confirmed; attempt++) {
       if (!verifyingRef.current) return;
       setStepStatus('scanning');
@@ -560,7 +484,7 @@ export default function RegistrationScreen({ navigation }) {
       // behaves exactly like it did when the video capture failed here
       // before). Removing it also makes the automatic capture feel
       // immediate rather than waiting through a multi-second recording.
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.7, skipProcessing: true });
+      const photo = await cameraRef.current.takePhoto();
       setCapturedPhoto(photo);
       setCaptureStage('reviewing');
     } catch (err) {
@@ -621,7 +545,7 @@ export default function RegistrationScreen({ navigation }) {
       formData.append('device_brand', device.brand);
       formData.append('device_os', device.os);
       formData.append('liveness_verified', 'true');
-      formData.append('liveness_actions', 'hold_still');
+      formData.append('liveness_actions', USE_EXPO_GO_FACE_FALLBACK ? EXPO_GO_FALLBACK_LIVENESS_ACTIONS : 'hold_still');
       formData.append('image', {
         uri: capturedPhoto.uri,
         name: 'face.jpg',
@@ -727,7 +651,11 @@ export default function RegistrationScreen({ navigation }) {
           </>
         ) : (
           <>
-            <CameraView ref={cameraRef} style={styles.camera} facing="front" mute>
+            {/* Overlays are siblings of the camera, not children: expo-camera
+                doesn't support children, and iOS doesn't draw them at all
+                (no guide oval, progress bar or captions over the preview). */}
+            <View style={styles.camera}>
+              <LiveFaceCamera ref={cameraRef} style={StyleSheet.absoluteFill} onFaces={liveness.onFaces} />
               <View style={styles.topScrim} pointerEvents="none" />
               <View style={styles.topBar} pointerEvents="none">
                 <StepProgress current={1} labels={['Details', 'Face Scan']} dark />
@@ -790,7 +718,7 @@ export default function RegistrationScreen({ navigation }) {
                   </View>
                 </View>
               )}
-            </CameraView>
+            </View>
             <View style={styles.bottomSheet}>
               <View style={styles.sheetHandle} />
               {!!errorMsg && <Text style={styles.errorText}>{errorMsg}</Text>}
@@ -801,7 +729,7 @@ export default function RegistrationScreen({ navigation }) {
                     <Text style={styles.secureBadgeText}>Secure Identity Verification</Text>
                   </View>
                   <Text style={styles.captureHint}>
-                    Hold your face steady in the frame, then blink when prompted \u2014 we'll detect it live on-device and capture automatically. If this is a new device for an already-registered account, your face is also matched against your identity on file, just like GCash's DoubleSafe.
+                    Hold your face steady in the frame, then blink when prompted — we'll detect it live on-device and capture automatically. If this is a new device for an already-registered account, your face is also matched against your identity on file, just like GCash's DoubleSafe.
                   </Text>
                   <PrimaryButton title="Start Face Scan" onPress={handleStartGuidedCapture} style={{ width: '100%' }} />
                   <TouchableOpacity onPress={() => setStep('details')}>

@@ -404,13 +404,17 @@ async function embedAlignedFace(rawRgbBuffer) {
  * photo the way a detection-less approach would.
  */
 async function getEmbedding(imagePath) {
-  const face = await detectFace(imagePath);
+  // Phone cameras often save a portrait photo as landscape pixels plus an
+  // EXIF orientation tag; without applying it the detector sees the face
+  // sideways and misses it. Decode upright once and use that for both steps.
+  const upright = await sharp(imagePath).rotate().toBuffer();
+  const face = await detectFace(upright);
   if (!face || !face.kps) {
     throw new Error(
       'No face was detected in the photo. Please retake it with your face centered, unobstructed, and well-lit.'
     );
   }
-  const aligned = await alignFace(imagePath, face.kps);
+  const aligned = await alignFace(upright, face.kps);
   return embedAlignedFace(aligned);
 }
 

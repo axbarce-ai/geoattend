@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Easing } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
-import * as FileSystem from 'expo-file-system/legacy';
 import * as Location from 'expo-location';
-import FaceDetection from '@react-native-ml-kit/face-detection';
+import { FACE_DETECTION_AVAILABLE, USE_EXPO_GO_FACE_FALLBACK, EXPO_GO_FALLBACK_LIVENESS_ACTIONS } from '../utils/faceDetector';
+import LiveFaceCamera, { useLivenessDetector } from '../components/LiveFaceCamera';
 import { colors, radius, shadow } from '../theme';
 import { verifyAttendanceFace } from '../api/client';
 import { useAttendanceTracking } from '../context/AttendanceTrackingContext';
@@ -21,17 +21,11 @@ import AppHeader from '../components/AppHeader';
 // flagged as it already was; only a genuine match
 // (controllers/attendanceController.js faceVerify) clears it.
 //
-// The capture algorithm (hold steady, then blink) is the same one
-// RegistrationScreen.js uses, deliberately duplicated rather than shared so
-// a future change to one doesn't silently change the other's behavior --
-// keep both in sync if the underlying algorithm changes.
+// The capture flow (hold steady, then blink) mirrors RegistrationScreen.js;
+// both use the same frame-level detector in components/LiveFaceCamera.js.
 const DETECTION_TIMEOUT_MS = 12000;
-const CONFIRM_FRAMES = 3;
 const DETECTION_ATTEMPTS = 3;
 const BLINK_TIMEOUT_MS = 8000;
-const EYES_OPEN_THRESHOLD = 0.6;
-const EYES_CLOSED_THRESHOLD = 0.3;
-const MAX_BLINK_FACE_DROPOUT = 6;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -40,6 +34,7 @@ export default function FaceVerificationScreen({ route, navigation }) {
   const { clearPendingVerification, refreshAfterVerification } = useAttendanceTracking();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
+  const liveness = useLivenessDetector();
   const verifyingRef = useRef(false);
   const startedRef = useRef(false);
 
@@ -79,84 +74,41 @@ export default function FaceVerificationScreen({ route, navigation }) {
     return () => loop.stop();
   }, [stage, scanPulse]);
 
-  const detectFaceHold = async () => {
-    const startedAt = Date.now();
-    let holdStreak = 0;
-    while (Date.now() - startedAt < DETECTION_TIMEOUT_MS) {
-      if (!verifyingRef.current) return false;
-      let photo;
-      try {
-        photo = await cameraRef.current.takePictureAsync({ quality: 0.3, skipProcessing: true, base64: false });
-      } catch (err) {
-        await wait(150);
-        continue;
-      }
-      let faces = [];
-      try {
-        faces = await FaceDetection.detect(photo.uri, {
-          performanceMode: 'fast', landmarkMode: 'none', contourMode: 'none', minFaceSize: 0.15,
-        });
-      } catch (err) { faces = []; }
-      if (photo.uri) FileSystem.deleteAsync(photo.uri, { idempotent: true }).catch(() => {});
+  // Driven by the camera's real-time face stream (components/LiveFaceCamera.js).
+  const detectFaceHold = () => liveness.waitForFaceHold(
+    DETECTION_TIMEOUT_MS,
+    () => !verifyingRef.current,
+    setLiveFaceDetected,
+  );
 
-      const face = faces && faces[0];
-      setLiveFaceDetected(!!face);
-      holdStreak = face ? holdStreak + 1 : 0;
-      if (holdStreak >= CONFIRM_FRAMES) return true;
-    }
-    return false;
-  };
-
-  const detectBlink = async () => {
-    const startedAt = Date.now();
-    let phase = 'awaiting-close';
-    let noFaceStreak = 0;
-    while (Date.now() - startedAt < BLINK_TIMEOUT_MS) {
-      if (!verifyingRef.current) return false;
-      let photo;
-      try {
-        photo = await cameraRef.current.takePictureAsync({ quality: 0.3, skipProcessing: true, base64: false });
-      } catch (err) {
-        await wait(150);
-        continue;
-      }
-      let faces = [];
-      try {
-        faces = await FaceDetection.detect(photo.uri, {
-          performanceMode: 'fast', landmarkMode: 'none', contourMode: 'none',
-          classificationMode: 'all', minFaceSize: 0.15,
-        });
-      } catch (err) { faces = []; }
-      if (photo.uri) FileSystem.deleteAsync(photo.uri, { idempotent: true }).catch(() => {});
-
-      const face = faces && faces[0];
-      setLiveFaceDetected(!!face);
-      if (!face) {
-        noFaceStreak += 1;
-        if (noFaceStreak >= MAX_BLINK_FACE_DROPOUT) return false;
-        continue;
-      }
-      noFaceStreak = 0;
-      const { leftEyeOpenProbability: left, rightEyeOpenProbability: right } = face;
-      if (left == null || right == null) continue;
-      const openness = (left + right) / 2;
-      if (phase === 'awaiting-close' && openness < EYES_CLOSED_THRESHOLD) {
-        phase = 'awaiting-reopen';
-        setBlinkEyesClosed(true);
-      } else if (phase === 'awaiting-reopen' && openness > EYES_OPEN_THRESHOLD) {
-        return true;
-      }
-    }
-    return false;
-  };
+  const detectBlink = () => liveness.waitForBlink(
+    BLINK_TIMEOUT_MS,
+    () => !verifyingRef.current,
+    setLiveFaceDetected,
+    setBlinkEyesClosed,
+  );
 
   const runVerification = async () => {
     if (!cameraRef.current || verifyingRef.current) return;
     setErrorMsg('');
+    if (!FACE_DETECTION_AVAILABLE && !USE_EXPO_GO_FACE_FALLBACK) {
+      setStage('failed');
+      setErrorMsg('Face scanning is not available in this version of the app. Please install the latest GeoAttend app.');
+      return;
+    }
     verifyingRef.current = true;
 
     let confirmed = false;
     let failedOnBlink = false;
+    if (USE_EXPO_GO_FACE_FALLBACK) {
+      // Expo Go has no ML Kit (see utils/faceDetector.js): short countdown,
+      // then capture; the server checks the photo contains a face.
+      setStage('scanning');
+      setLiveFaceDetected(true);
+      await wait(2500);
+      if (!verifyingRef.current) return;
+      confirmed = true;
+    }
     for (let i = 0; i < DETECTION_ATTEMPTS && !confirmed; i++) {
       if (!verifyingRef.current) return;
       setStage('scanning');
@@ -185,7 +137,7 @@ export default function FaceVerificationScreen({ route, navigation }) {
 
     setStage('uploading');
     try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.7, skipProcessing: true });
+      const photo = await cameraRef.current.takePhoto();
 
       let latitude; let longitude;
       try {
@@ -200,7 +152,7 @@ export default function FaceVerificationScreen({ route, navigation }) {
       const formData = new FormData();
       formData.append('selfie', { uri: photo.uri, name: 'verify.jpg', type: 'image/jpeg' });
       formData.append('liveness_verified', 'true');
-      formData.append('liveness_actions', 'hold,blink');
+      formData.append('liveness_actions', USE_EXPO_GO_FACE_FALLBACK ? EXPO_GO_FALLBACK_LIVENESS_ACTIONS : 'hold,blink');
       if (latitude != null) formData.append('latitude', String(latitude));
       if (longitude != null) formData.append('longitude', String(longitude));
 
@@ -261,7 +213,7 @@ export default function FaceVerificationScreen({ route, navigation }) {
 
       <View style={styles.cameraWrap}>
         {permission?.granted ? (
-          <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="front" />
+          <LiveFaceCamera ref={cameraRef} style={StyleSheet.absoluteFill} onFaces={liveness.onFaces} />
         ) : (
           <View style={[StyleSheet.absoluteFill, styles.permissionFallback]}>
             <Ionicons name="camera-outline" size={40} color="#fff" />
